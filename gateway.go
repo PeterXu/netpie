@@ -4,6 +4,8 @@ import (
 	"log"
 	"net"
 	"time"
+
+	util "github.com/PeterXu/goutil"
 )
 
 var defaultGateway = NewGateway()
@@ -43,17 +45,19 @@ func (g *Gateway) OnTcpPacket(e evEvent) {
 }
 
 func (g *Gateway) OnUdpPacket(e evEvent) {
-	conn := e.Get("conn")
-	data := e.Get("data")
-	if sink := g.findConnection(conn.RemoteAddr()); sink != nil {
-		sink.onReceivedData(data)
-	} else {
-		handleStunPacket(data, conn.RemoteAddr())
-	}
+	/*
+		conn := e.Get("conn")
+		data := e.Get("data")
+		if sink := g.findConnection(conn.RemoteAddr()); sink != nil {
+			sink.onReceivedData(data)
+		} else {
+			handleStunPacket(data, conn.RemoteAddr())
+		}
+	*/
 }
 
 func (g *Gateway) findConnection(addr net.Addr) *Connection {
-	var key string = addrToString(addr)
+	var key string = util.AddrToString(addr)
 	if u, ok := g.connections[key]; ok {
 		return u
 	}
