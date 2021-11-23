@@ -16,8 +16,8 @@ func NewGateway() *Gateway {
 		stuns:       make(map[string]*StunInfo),
 		connections: make(map[string]*Connection),
 	}
-	listenEvent("udp", gw)
-	listenEvent("tcp", gw)
+	listenEvent("udp", gw, "")
+	listenEvent("tcp", gw, "")
 	go gw._loop()
 	return gw
 }

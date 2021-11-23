@@ -7,16 +7,39 @@ import (
 type evEvent = ev.Event
 type evData = ev.M
 
-func listenEvent(name string, listener ev.Listener) {
-	ev.Listen(name, listener, ev.Normal)
+var gEvManagers map[string]*ev.Manager
+
+func init() {
+	gEvManagers = make(map[string]*ev.Manager)
 }
 
-func fireEvent(name string, params ev.M) {
-	ev.Fire(name, params)
+func getEvManager(key string, createIfNo bool) *ev.Manager {
+	if len(key) == 0 {
+		return ev.DefaultEM
+	} else {
+		val, ok := gEvManagers[key]
+		if !ok && createIfNo {
+			val = ev.NewManager(key)
+			gEvManagers[key] = val
+		}
+		return val
+	}
 }
 
-func asyncFireEvent(name string, params ev.M) {
+func listenEvent(name string, listener ev.Listener, key string) {
+	if obj := getEvManager(key, true); obj != nil {
+		obj.Listen(name, listener, ev.Normal)
+	}
+}
+
+func fireEvent(name string, params ev.M, key string) {
+	if obj := getEvManager(key, false); obj != nil {
+		obj.Fire(name, params)
+	}
+}
+
+func asyncFireEvent(name string, params ev.M, key string) {
 	go func() {
-		fireEvent(name, params)
+		fireEvent(name, params, key)
 	}()
 }

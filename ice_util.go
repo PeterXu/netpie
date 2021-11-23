@@ -10,20 +10,15 @@ import (
 	"github.com/pion/randutil"
 )
 
-type IceSink interface {
-	onIceCandidate(candidate string)
-	onIceAuth(ufrag, pwd string)
-}
-
 type IceAgent struct {
-	sink          IceSink
+	TAG           string
 	agent         *ice.Agent
 	isControlling bool
 }
 
-func NewIceAgent(sink IceSink) *IceAgent {
+func NewIceAgent() *IceAgent {
 	return &IceAgent{
-		sink: sink,
+		TAG: "ICE",
 	}
 }
 
@@ -60,7 +55,7 @@ func (ic *IceAgent) init(urls []string) error {
 			return
 		}
 		szval := c.Marshal()
-		ic.sink.onIceCandidate(szval)
+		fireEvent("ice-candidate", evData{"data": szval}, ic.TAG)
 	}); err != nil {
 		log.Println(err)
 		return err
@@ -86,7 +81,7 @@ func (ic *IceAgent) init(urls []string) error {
 		return (err)
 	}
 
-	ic.sink.onIceAuth(localUfrag, localPwd)
+	fireEvent("ice-auth", evData{"ufrag": localUfrag, "pwd": localPwd}, ic.TAG)
 
 	if err = iceAgent.GatherCandidates(); err != nil {
 		return (err)
@@ -115,7 +110,8 @@ func (ic *IceAgent) start(remoteUfrag, remotePwd string) error {
 		for {
 			time.Sleep(time.Second * 3)
 
-			val, err := randutil.GenerateCryptoRandomString(15, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+			val, err := randutil.GenerateCryptoRandomString(15,
+				"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 			if err != nil {
 				//panic(err)
 				return

@@ -29,7 +29,7 @@ func (s *udpService) React(frame []byte, c gn.Conn) (out []byte, action gn.Actio
 	if frame != nil && len(frame) > 0 {
 		data := make([]byte, len(frame))
 		copy(data, frame)
-		fireEvent("udp", evData{"conn": c, "data": data})
+		fireEvent("udp", evData{"conn": c, "data": data}, "")
 	} else {
 		log.Println("no frame from", c.RemoteAddr())
 	}
