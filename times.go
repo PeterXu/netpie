@@ -10,7 +10,7 @@ type TimeInfo struct {
 }
 
 func NewTimeInfo() *TimeInfo {
-	now := util.NowMs64()
+	now := util.NowMs()
 	return &TimeInfo{
 		utime: now,
 		ctime: now,
@@ -18,13 +18,13 @@ func NewTimeInfo() *TimeInfo {
 }
 
 func (ti *TimeInfo) updateTime() {
-	ti.utime = util.NowMs64()
+	ti.utime = util.NowMs()
 }
 
 func (ti *TimeInfo) isTimeout(timeout int) bool {
-	return util.NowMs64() >= (ti.utime + int64(timeout))
+	return util.NowMs() >= (ti.utime + int64(timeout))
 }
 
 func (ti *TimeInfo) sinceLastUpdate() int {
-	return int(util.NowMs64() - ti.utime)
+	return int(util.NowMs() - ti.utime)
 }

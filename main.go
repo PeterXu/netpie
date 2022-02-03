@@ -10,14 +10,14 @@ import (
 // export TestNetPie
 func TestNetPie() {
 	println("export Test")
-	println(CurrentFunction())
+	println(GoFunc())
 }
 
 type TestStruct struct {
 }
 
 func (t *TestStruct) PrintStruct() {
-	println(CurrentFunction())
+	println(GoFunc())
 }
 
 func main() {
@@ -55,8 +55,8 @@ func main() {
 	case "client":
 		clientFlags.Parse(os.Args[2:])
 		fmt.Println(client_signal_addr)
-		client := NewClient()
-		client.StartCli(client_signal_addr)
+		client := NewClient(client_signal_addr)
+		client.StartCli()
 	case "server":
 		serverFlags.Parse(os.Args[2:])
 		fmt.Println(server_signal_addr, server_listen_addr)
@@ -66,7 +66,6 @@ func main() {
 		fmt.Println(signal_listen_addr)
 		server := NewSignalServer()
 		server.Start(signal_listen_addr)
-		<-ch
 	default:
 		usage()
 		os.Exit(1)

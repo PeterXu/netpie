@@ -55,8 +55,8 @@ func (c *Connection) onReceivedData(data []byte) {
 
 	if util.IsStunPacket(data) {
 		var msg util.IceMessage
-		if !msg.Read(data) {
-			log.Println(c.TAG, "invalid stun message")
+		if err := msg.Read(data); err != nil {
+			log.Println(c.TAG, "invalid stun message", err)
 			return
 		}
 
@@ -107,8 +107,8 @@ func (c *Connection) onRecvStunBindingRequest(transId string) {
 	sendPwd := ""
 
 	var buf bytes.Buffer
-	if !util.GenStunMessageResponse(&buf, sendPwd, transId, c.addr) {
-		log.Println(c.TAG, "fail to gen stun response")
+	if err := util.GenStunMessageResponse(&buf, sendPwd, transId, c.addr); err != nil {
+		log.Println(c.TAG, "fail to gen stun response", err)
 		return
 	}
 
@@ -127,11 +127,11 @@ func (c *Connection) sendStunBindingRequest() bool {
 	var recvUfrag, recvPwd string
 
 	var buf bytes.Buffer
-	if util.GenStunMessageRequest(&buf, sendUfrag, recvUfrag, recvPwd) {
+	if err := util.GenStunMessageRequest(&buf, sendUfrag, recvUfrag, recvPwd); err == nil {
 		log.Println(c.TAG, "send stun binding request, len=", buf.Len())
 		c.sendData(buf.Bytes())
 	} else {
-		log.Println(c.TAG, "fail to get stun request bufffer")
+		log.Println(c.TAG, "fail to get stun request bufffer", err)
 	}
 	return true
 }

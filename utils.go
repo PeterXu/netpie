@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"crypto/md5"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"math/rand"
@@ -37,39 +39,21 @@ func MD5SumPwdGenerate(pwd string) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// return "pwd_md5, salt"
-func MD5SumPwdSaltGenerate(pwd string) (string, string) {
-	h := md5.New()
-	io.WriteString(h, pwd)
-	salt := RandomString(4)
-	return fmt.Sprintf("%x", h.Sum(nil)), salt
-}
-
-// return "(pwd_md5:salt)_md5 : salt"
-func MD5SumPwdSaltReGenerate(pwd_md5_salt string) string {
-	parts := strings.Split(pwd_md5_salt, ":")
-	if len(parts) != 2 {
-		return ""
-	}
-	pwd_md5, salt := parts[0], parts[1]
-
+// return new "pwd_md5"
+func MD5SumPwdSaltGenerate(pwd_md5, salt string) string {
 	h := md5.New()
 	io.WriteString(h, pwd_md5)
 	io.WriteString(h, salt)
-	return fmt.Sprintf("%x:%s", h.Sum(nil), salt)
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-func MD5SumPwdSaltVerify(pwd_md5, stored_pwd_md5_salt string) bool {
-	parts := strings.Split(stored_pwd_md5_salt, ":")
-	if len(parts) != 2 {
-		return false
-	}
-	salt := parts[1]
-	tmp_pwd_salt := MD5SumPwdSaltReGenerate(pwd_md5 + ":" + salt)
-	return (tmp_pwd_salt == stored_pwd_md5_salt)
+// verify pwd_md5 with salt
+func MD5SumPwdSaltVerify(pwd_md5, stored_pwd_md5, salt string) bool {
+	new_pwd_md5 := MD5SumPwdSaltGenerate(pwd_md5, salt)
+	return (new_pwd_md5 == stored_pwd_md5)
 }
 
-func CurrentFunction() string {
+func GoFunc() string {
 	counter, _, _, success := runtime.Caller(1)
 	if !success {
 		//println("functionName: runtime.Caller: failed")
@@ -79,7 +63,7 @@ func CurrentFunction() string {
 
 	fullname := runtime.FuncForPC(counter).Name()
 	parts := strings.Split(fullname, ".")
-	return parts[len(parts)-1]
+	return strings.ToLower(parts[len(parts)-1])
 }
 
 var termState *term.State
@@ -116,4 +100,20 @@ func ShellExecCmd(bin string, opts ...string) {
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("Got error: %s\n", err.Error())
 	}
+}
+
+func GobEncode(obj interface{}) (*bytes.Buffer, error) {
+	cached := &bytes.Buffer{}
+	enc := gob.NewEncoder(cached)
+	if err := enc.Encode(obj); err != nil {
+		return nil, err
+	} else {
+		return cached, nil
+	}
+}
+
+func GobDecode(data []byte, obj interface{}) error {
+	cached := bytes.NewBuffer(data)
+	dec := gob.NewDecoder(cached)
+	return dec.Decode(obj)
 }
