@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
@@ -63,7 +64,7 @@ func GoFunc() string {
 
 	fullname := runtime.FuncForPC(counter).Name()
 	parts := strings.Split(fullname, ".")
-	return strings.ToLower(parts[len(parts)-1])
+	return parts[len(parts)-1]
 }
 
 var termState *term.State
@@ -116,4 +117,12 @@ func GobDecode(data []byte, obj interface{}) error {
 	cached := bytes.NewBuffer(data)
 	dec := gob.NewDecoder(cached)
 	return dec.Decode(obj)
+}
+
+func JsonEncode(obj interface{}) string {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }

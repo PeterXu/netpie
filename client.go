@@ -98,6 +98,10 @@ func (c *Client) GoRun(cmd string, params []string) error {
 		if len(params) == 0 {
 			err = signal.Services()
 		}
+	case "myservices":
+		if len(params) == 0 {
+			err = signal.MyServices()
+		}
 	case "join-service":
 		if len(params) == 2 {
 			err = signal.JoinService(params[0], params[1])
@@ -109,10 +113,6 @@ func (c *Client) GoRun(cmd string, params []string) error {
 	case "show-service":
 		if len(params) == 1 {
 			err = signal.ShowService(params[0])
-		}
-	case "show-services":
-		if len(params) == 0 {
-			err = signal.ShowServices()
 		}
 	}
 	return err
@@ -139,11 +139,11 @@ func (cc *ClientCompleter) Init() {
 		{Text: "register", Description: "usage: register id pwd"},
 		{Text: "login", Description: "usage: login id pwd"},
 		{Text: "logout", Description: "usage: logout"},
-		{Text: "services", Description: "usage: services (list available services)"},
+		{Text: "services", Description: "usage: services (list all services)"},
+		{Text: "myservices", Description: "usage: myservices (list joined services)"},
 		{Text: "join-service", Description: "usage: join-service serviceName pwd"},
 		{Text: "leave-service", Description: "usage: leave-service serviceName"},
 		{Text: "show-service", Description: "usage: show-service serviceName (show service info)"},
-		{Text: "show-services", Description: "usage: show-services (show joined services)"},
 	}
 }
 

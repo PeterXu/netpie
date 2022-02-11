@@ -3,129 +3,99 @@ package main
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	util "github.com/PeterXu/goutil"
 	"github.com/gorilla/websocket"
 )
 
-/**
- * Signal event
- */
-func newSignalEvent() *SignalEvent {
-	return &SignalEvent{}
-}
+var (
+	errFnInvalidPwd = func(pwd string) error { return errors.New("invalid pwd:" + pwd) }
+	errFnWrongPwd   = func(pwd string) error { return errors.New("wrong pwd:" + pwd) }
 
-type SignalEvent struct {
-}
+	errFnPeerInvalidId = func(id string) error { return errors.New("peer invalid id: " + id) }
+	errFnPeerExist     = func(id string) error { return errors.New("peer exist: " + id) }
+	errFnPeerNotLogin  = func(id string) error { return errors.New("peer not login: " + id) }
+	errFnPeerNotFound  = func(id string) error { return errors.New("peer not found: " + id) }
 
-type SignalEventCallback interface {
-	OnEvent(event SignalEvent)
-}
+	errFnServiceNotFound = func(id string) error { return errors.New("service not found: " + id) }
+)
+
+type fnSignalServerAction = func(req *SignalRequest, resp *SignalResponse) error
 
 /**
  * Signal peer
  */
 func newSignalPeer(id string, pwd_md5, salt string) *SignalPeer {
 	return &SignalPeer{
-		id:      id,
-		pwd_md5: pwd_md5,
-		salt:    salt,
-		groups:  make(map[string]*SignalGroup),
+		Id:         id,
+		PwdMd5:     pwd_md5,
+		Salt:       salt,
+		InServices: make(map[string]bool),
 	}
 }
 
 type SignalPeer struct {
-	id      string
-	pwd_md5 string
-	salt    string
-	groups  map[string]*SignalGroup
-	online  bool
+	Id         string
+	PwdMd5     string
+	Salt       string
+	InServices map[string]bool // id=>..
 }
 
 /**
- * Signal group
+ * Signal service
  */
-func newSignalGroup() *SignalGroup {
-	return &SignalGroup{
-		ctime: NowTimeMs(),
-		utime: NowTimeMs(),
+func newSignalService() *SignalService {
+	return &SignalService{
+		Ctime: NowTimeMs(),
 	}
 }
 
-type SignalGroup struct {
-	id      string // group id
-	pwd_md5 string // group pwd-md5
-	salt    string // group salt
-	ctime   int64  // group create time
-	utime   int64  // group update time
+type SignalService struct {
+	Id          string
+	Name        string
+	Description string
+	Owner       string
+	PwdMd5      string `json:"-"`
+	Salt        string `json:"-"`
+	Ctime       int64  `json:"-"`
+}
+
+type SignalDatabase struct {
+	Peers    map[string]*SignalPeer
+	Services map[string]*SignalService
 }
 
 /**
- * SignalRequest/SignalResponse
- */
-func newSignalRequest(id string) *SignalRequest {
-	return &SignalRequest{
-		FromId: id,
-	}
-}
-
-type SignalRequest struct {
-	Sequence string
-	Action   string
-	FromId   string
-	PwdMd5   string
-	Salt     string
-}
-
-func newSignalResponse(sequence string) *SignalResponse {
-	return &SignalResponse{
-		Sequence: sequence,
-	}
-}
-
-type SignalResponse struct {
-	Sequence string
-	Services []string
-	Err      error
-}
-
-func newSignalMessage() *SignalMessage {
-	return &SignalMessage{
-		ctime: NowTimeMs(),
-	}
-}
-
-type SignalMessage struct {
-	req     *SignalRequest
-	ch_resp chan *SignalResponse
-	conn    *SignalConnection
-	ctime   int64
-}
-
-/**
- * Signal server, manage all peers/groups
+ * Signal server, manage all peers/services
  */
 func NewSignalServer() *SignalServer {
 	server := &SignalServer{
 		db: &SignalDatabase{
-			peers:  make(map[string]*SignalPeer),
-			groups: make(map[string]*SignalGroup),
+			Peers:    make(map[string]*SignalPeer),
+			Services: make(map[string]*SignalService),
 		},
-		ch_receive: make(chan *SignalMessage),
-		ch_connect: make(chan *SignalConnection),
-		ch_accept:  make(chan *SignalConnection),
-		ch_close:   make(chan *SignalConnection),
-		pending:    make(map[*SignalConnection]bool),
-		conns:      make(map[string]*SignalConnection),
-	}
-	server.TAG = "sigserver"
-	return server
-}
 
-type SignalDatabase struct {
-	peers  map[string]*SignalPeer
-	groups map[string]*SignalGroup
+		ch_connect: make(chan *SignalConnection),
+		ch_close:   make(chan *SignalConnection),
+		ch_receive: make(chan *SignalMessage),
+
+		connections: make(map[*SignalConnection]bool),
+		onlines:     make(map[string]*SignalConnection),
+		actions:     make(map[string]fnSignalServerAction),
+	}
+
+	server.TAG = "sigserver"
+	server.actions["register"] = server.Register
+	server.actions["login"] = server.Login
+	server.actions["logout"] = server.Logout
+	server.actions["services"] = server.Services
+	server.actions["myservices"] = server.MyServices
+	server.actions["join-service"] = server.JoinService
+	server.actions["leave-service"] = server.LeaveService
+	server.actions["show-service"] = server.ShowService
+	return server
 }
 
 type SignalServer struct {
@@ -133,15 +103,13 @@ type SignalServer struct {
 
 	db *SignalDatabase
 
-	// Inbound messages from the conns.
+	ch_connect chan *SignalConnection
+	ch_close   chan *SignalConnection
 	ch_receive chan *SignalMessage
 
-	ch_connect chan *SignalConnection
-	ch_accept  chan *SignalConnection
-	ch_close   chan *SignalConnection
-
-	pending map[*SignalConnection]bool
-	conns   map[string]*SignalConnection
+	connections map[*SignalConnection]bool
+	onlines     map[string]*SignalConnection // uid => ..
+	actions     map[string]fnSignalServerAction
 }
 
 var upgrader = websocket.Upgrader{
@@ -168,30 +136,20 @@ func (ss *SignalServer) Run() {
 		select {
 		case conn := <-ss.ch_connect:
 			ss.Printf("add one connection: %v\n", conn)
-			ss.pending[conn] = true
-		case conn := <-ss.ch_accept:
-			if len(conn.id) == 0 {
-				ss.Printf("invalid client connection: %v\n", conn)
-				break
-			}
-			ss.Printf("accept one connection:%v\n", conn)
-			if _, ok := ss.pending[conn]; ok {
-				delete(ss.pending, conn)
-			}
-			ss.conns[conn.id] = conn
+			ss.connections[conn] = true
 		case conn := <-ss.ch_close:
 			ss.Printf("close one connection:%v\n", conn)
-			if _, ok := ss.pending[conn]; ok {
-				delete(ss.pending, conn)
+			if _, ok := ss.connections[conn]; ok {
+				delete(ss.connections, conn)
 			} else {
-				if _, ok := ss.conns[conn.id]; ok {
-					delete(ss.conns, conn.id)
+				if _, ok := ss.onlines[conn.id]; ok {
+					delete(ss.onlines, conn.id)
 				}
 			}
 			close(conn.send)
 		case msg := <-ss.ch_receive:
-			ss.Printf("receive request from connection:%v\n", msg.conn)
-			ss.OnMessage(msg.req, msg.conn)
+			ss.Printf("receive request from connection:%v\n", msg.req.conn)
+			ss.OnMessage(msg.req)
 		case <-tickChan.C:
 			// clear timeout
 		}
@@ -213,66 +171,156 @@ func (ss *SignalServer) SyncFromStorage() {
 	}
 }
 
-func (ss *SignalServer) IsPeerOnline(id string) bool {
-	if peer, ok := ss.db.peers[id]; ok {
-		return peer.online
+func (ss *SignalServer) CheckOnline(id string) error {
+	if _, ok := ss.onlines[id]; ok {
+		return nil
+	} else {
+		return errFnPeerNotLogin(id)
 	}
-	return false
 }
 
-func (ss *SignalServer) OnMessage(req *SignalRequest, conn *SignalConnection) {
+func (ss *SignalServer) OnMessage(req *SignalRequest) {
+	var err error
 	resp := newSignalResponse(req.Sequence)
-	switch req.Action {
-	case "register":
-		resp.Err = ss.Register(req, resp)
-	case "login":
-		resp.Err = ss.Login(req, resp)
-	case "logout":
-		resp.Err = ss.Logout(req, resp)
+	if fn, ok := ss.actions[strings.ToLower(req.Action)]; ok {
+		err = fn(req, resp)
+	} else {
+		err = errors.New("invalid action: " + req.Action)
 	}
-	if resp.Err != nil {
-		ss.Printf("process message err: %v\n", resp.Err)
+	if err != nil {
+		ss.Printf("process message err: %v, conn: %v\n", err, req.conn)
 	}
-	conn.send <- resp
+
+	resp.Error = err
+	req.conn.send <- resp
 }
 
 func (ss *SignalServer) Register(req *SignalRequest, resp *SignalResponse) error {
 	if len(req.FromId) < 10 {
-		return errors.New("register invalid id=" + req.FromId)
+		return errFnPeerInvalidId(req.FromId)
 	}
 
 	if len(req.PwdMd5) < 36 || len(req.Salt) < 4 {
-		return errors.New("register invalid pwd_md5 or salt")
+		return errFnInvalidPwd(req.PwdMd5 + ":" + req.Salt)
 	}
 
-	if _, ok := ss.db.peers[req.FromId]; !ok {
+	if _, ok := ss.db.Peers[req.FromId]; ok {
+		return errFnPeerExist(req.FromId)
+	} else {
 		new_pwd_md5 := MD5SumPwdSaltGenerate(req.PwdMd5, req.Salt)
 		peer := newSignalPeer(req.FromId, new_pwd_md5, req.Salt)
-		ss.db.peers[req.FromId] = peer
+		ss.db.Peers[req.FromId] = peer
 		ss.SyncToStorage()
 		return nil
-	} else {
-		return errors.New("register peer existed id=" + req.FromId)
 	}
 }
 
 func (ss *SignalServer) Login(req *SignalRequest, resp *SignalResponse) error {
-	peer, ok := ss.db.peers[req.FromId]
-	if !ok {
-		return errors.New("login peer not exist, id=" + req.FromId)
+	conn := req.conn
+	ss.Printf("client login with connection:%v\n", conn)
+
+	if peer, ok := ss.db.Peers[req.FromId]; !ok {
+		return errFnPeerNotFound(req.FromId)
 	} else {
-		if !MD5SumPwdSaltVerify(req.PwdMd5, peer.pwd_md5, peer.salt) {
-			return errors.New("login wrong password for id=" + req.FromId)
-		} else {
-			peer.online = true
-			return nil
+		if !MD5SumPwdSaltVerify(req.PwdMd5, peer.PwdMd5, peer.Salt) {
+			return errFnWrongPwd(req.PwdMd5 + ":" + peer.Salt + " != " + peer.PwdMd5)
+		}
+		for id, _ := range peer.InServices {
+			peer.InServices[id] = false
 		}
 	}
+
+	conn.id = req.FromId
+	if _, ok := ss.connections[conn]; ok {
+		delete(ss.connections, conn)
+	}
+	ss.onlines[conn.id] = conn
+	return nil
 }
 
 func (ss *SignalServer) Logout(req *SignalRequest, resp *SignalResponse) error {
-	if peer, ok := ss.db.peers[req.FromId]; ok {
-		peer.online = false
+	conn := req.conn
+	ss.Printf("client offline with connection:%v\n", conn)
+	if _, ok := ss.connections[conn]; !ok {
+		if _, ok := ss.onlines[conn.id]; ok {
+			delete(ss.onlines, conn.id)
+			ss.connections[conn] = true
+		}
 	}
 	return nil
+}
+
+// return all services
+func (ss *SignalServer) Services(req *SignalRequest, resp *SignalResponse) error {
+	if err := ss.CheckOnline(req.FromId); err != nil {
+		return err
+	}
+
+	for id, _ := range ss.db.Services {
+		resp.Result = append(resp.Result, id)
+	}
+	return nil
+}
+
+// return joined services
+func (ss *SignalServer) MyServices(req *SignalRequest, resp *SignalResponse) error {
+	if err := ss.CheckOnline(req.FromId); err != nil {
+		return err
+	}
+
+	if peer, ok := ss.db.Peers[req.FromId]; !ok {
+		return errFnPeerNotFound(req.FromId)
+	} else {
+		for id, ok := range peer.InServices {
+			if ok {
+				resp.Result = append(resp.Result, id)
+			}
+		}
+		return nil
+	}
+}
+
+func (ss *SignalServer) JoinService(req *SignalRequest, resp *SignalResponse) error {
+	if err := ss.CheckOnline(req.FromId); err != nil {
+		return err
+	}
+
+	if peer, ok := ss.db.Peers[req.FromId]; !ok {
+		return errFnPeerNotFound(req.FromId)
+	} else {
+		if item, ok := ss.db.Services[req.ServiceId]; !ok {
+			return errFnServiceNotFound(req.ServiceId)
+		} else {
+			if !MD5SumPwdSaltVerify(req.ServicePwdMd5, item.PwdMd5, item.Salt) {
+				return errFnWrongPwd(req.ServicePwdMd5 + ":" + item.Salt + " != " + item.PwdMd5)
+			}
+			peer.InServices[req.ServiceId] = true
+		}
+	}
+
+	return nil
+}
+
+func (ss *SignalServer) LeaveService(req *SignalRequest, resp *SignalResponse) error {
+	if err := ss.CheckOnline(req.FromId); err != nil {
+		return err
+	}
+
+	if peer, ok := ss.db.Peers[req.FromId]; ok {
+		peer.InServices[req.ServiceId] = false
+	}
+	return nil
+}
+
+func (ss *SignalServer) ShowService(req *SignalRequest, resp *SignalResponse) error {
+	if err := ss.CheckOnline(req.FromId); err != nil {
+		return err
+	}
+
+	if item, ok := ss.db.Services[req.ServiceId]; !ok {
+		return errFnServiceNotFound(req.ServiceId)
+	} else {
+		resp.Result = append(resp.Result, JsonEncode(item))
+		return nil
+	}
 }

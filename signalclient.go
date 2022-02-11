@@ -246,7 +246,21 @@ func (sc *SignalClient) Services() error {
 
 	req := newSignalRequest(sc.id)
 	if resp, err := sc.SendRequest(GoFunc(), req); err == nil {
-		fmt.Println(resp.Services)
+		fmt.Println(resp.Result)
+		return nil
+	} else {
+		return err
+	}
+}
+
+func (sc *SignalClient) MyServices() error {
+	if err := sc.CheckOnline(true); err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	req := newSignalRequest(sc.id)
+	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
 		return nil
 	} else {
 		return err
@@ -260,6 +274,8 @@ func (sc *SignalClient) JoinService(sid, pwd string) error {
 	}
 
 	req := newSignalRequest(sc.id)
+	req.ServiceId = sid
+	req.ServicePwdMd5 = MD5SumPwdGenerate(pwd)
 	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
 		return nil
 	} else {
@@ -295,20 +311,6 @@ func (sc *SignalClient) ShowService(sid string) error {
 	}
 }
 
-func (sc *SignalClient) ShowServices() error {
-	if err := sc.CheckOnline(true); err != nil {
-		fmt.Println(err)
-		return err
-	}
-
-	req := newSignalRequest(sc.id)
-	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
-		return nil
-	} else {
-		return err
-	}
-}
-
 func (sc *SignalClient) SendRequest(action string, req *SignalRequest) (*SignalResponse, error) {
 	req.Action = action
 	req.Sequence = RandomString(24)
@@ -327,10 +329,10 @@ func (sc *SignalClient) SendRequest(action string, req *SignalRequest) (*SignalR
 
 	select {
 	case resp := <-ch_resp:
-		if resp.Err == nil {
+		if resp.Error == nil {
 			return resp, nil
 		} else {
-			return nil, resp.Err
+			return nil, resp.Error
 		}
 	case <-ticker.C:
 		return nil, errors.New("request timeout")

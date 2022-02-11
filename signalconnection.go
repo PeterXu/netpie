@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -51,21 +50,26 @@ func (c *SignalConnection) readPump() {
 	})
 
 	for {
-		_, data, err := c.conn.ReadMessage()
+		mt, data, err := c.conn.ReadMessage()
+		c.ss.Println("conn, recv mt=", mt, len(data), err)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("conn, close error: %v\n", err)
+				c.ss.Printf("conn, close error: %v\n", err)
 			}
+			break
+		}
+
+		if mt == websocket.PongMessage {
 			break
 		}
 
 		req := newSignalRequest("")
 		if err := GobDecode(data, req); err != nil {
-			log.Printf("conn, decode error: %v\n", err)
+			c.ss.Printf("conn, decode error: %v\n", err)
 		} else {
+			req.conn = c
 			msg := newSignalMessage()
 			msg.req = req
-			msg.conn = c
 			c.ss.ch_receive <- msg
 		}
 	}
@@ -89,16 +93,16 @@ func (c *SignalConnection) writePump() {
 				return
 			}
 			if buf, err := GobEncode(resp); err != nil {
-				log.Printf("conn, encode err: %v\n", err)
+				c.ss.Printf("conn, encode err: %v\n", err)
 			} else {
 				if err := c.conn.WriteMessage(websocket.BinaryMessage, buf.Bytes()); err != nil {
-					log.Printf("conn, write err: %v\n", err)
+					c.ss.Printf("conn, write err: %v\n", err)
 				}
 			}
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				log.Printf("conn, ping err: %v\n", err)
+				c.ss.Printf("conn, ping err: %v\n", err)
 				return
 			}
 		}
@@ -108,7 +112,7 @@ func (c *SignalConnection) writePump() {
 func serveWs(ss *SignalServer, w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("serverWs err", err)
+		ss.Println("conn, serverWs err", err)
 		return
 	}
 
