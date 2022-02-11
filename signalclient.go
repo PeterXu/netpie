@@ -10,6 +10,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type fnSignalClientAction = func(params []string) error
+
 /**
  * Signal client
  */
@@ -29,8 +31,22 @@ func NewSignalClient(cb SignalEventCallback) *SignalClient {
 		send:    make(chan *SignalMessage),
 		pending: make(map[string]*SignalMessage),
 		exit:    make(chan error),
+		actions: make(map[string]fnSignalClientAction),
 	}
+
 	client.TAG = "sigclient"
+	client.actions["status"] = client.Status
+	client.actions["connect"] = client.Connect
+	client.actions["disconnect"] = client.Disconnect
+	client.actions["register"] = client.Register
+	client.actions["login"] = client.Login
+	client.actions["logout"] = client.Logout
+	client.actions["services"] = client.Services
+	client.actions["myservices"] = client.MyServices
+	client.actions["join-service"] = client.JoinService
+	client.actions["leave-service"] = client.LeaveService
+	client.actions["show-service"] = client.ShowService
+
 	return client
 }
 
@@ -46,6 +62,7 @@ type SignalClient struct {
 	network NetworkStatus
 	online  bool
 	sigaddr string
+	actions map[string]fnSignalClientAction
 }
 
 func (sc *SignalClient) Start() {
@@ -156,7 +173,11 @@ func (sc *SignalClient) CheckOnline(expectOnline bool) error {
 	}
 }
 
-func (sc *SignalClient) Status() error {
+func (sc *SignalClient) Status(params []string) error {
+	if len(params) != 0 {
+		return errFnInvalidParamters(params)
+	}
+
 	switch sc.network {
 	case kNetworkConnecting:
 		fmt.Println("connecting")
@@ -170,7 +191,12 @@ func (sc *SignalClient) Status() error {
 	return nil
 }
 
-func (sc *SignalClient) Connect(sigaddr string) error {
+func (sc *SignalClient) Connect(params []string) error {
+	if len(params) != 1 {
+		return errFnInvalidParamters(params)
+	}
+	sigaddr := params[1]
+
 	if sc.network == kNetworkConnecting || sc.network == kNetworkConnected {
 		fmt.Println("connecting/connected: you need to disconnect at first")
 	} else {
@@ -180,19 +206,28 @@ func (sc *SignalClient) Connect(sigaddr string) error {
 	return nil
 }
 
-func (sc *SignalClient) Disconnect() error {
+func (sc *SignalClient) Disconnect(params []string) error {
+	if len(params) != 0 {
+		return errFnInvalidParamters(params)
+	}
 	sc.Close()
 	return nil
 }
 
-func (sc *SignalClient) Register(id, pwd string) error {
+func (sc *SignalClient) Register(params []string) error {
+	if len(params) != 2 {
+		return errFnInvalidParamters(params)
+	}
+	id := params[0]
+	pwd := params[1]
+
 	if err := sc.CheckOnline(false); err != nil {
 		fmt.Println(err)
 		return err
 	}
 
 	// md5sum(pwd), and server will stored re-md5 with salt
-	req := newSignalRequest(sc.id)
+	req := newSignalRequest(id)
 	req.PwdMd5 = MD5SumPwdGenerate(pwd)
 	req.Salt = RandomString(4)
 	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
@@ -203,7 +238,13 @@ func (sc *SignalClient) Register(id, pwd string) error {
 	}
 }
 
-func (sc *SignalClient) Login(id, pwd string) error {
+func (sc *SignalClient) Login(params []string) error {
+	if len(params) != 2 {
+		return errFnInvalidParamters(params)
+	}
+	id := params[0]
+	pwd := params[1]
+
 	if err := sc.CheckOnline(false); err != nil {
 		fmt.Println(err)
 		return err
@@ -222,7 +263,11 @@ func (sc *SignalClient) Login(id, pwd string) error {
 	}
 }
 
-func (sc *SignalClient) Logout() error {
+func (sc *SignalClient) Logout(params []string) error {
+	if len(params) != 0 {
+		return errFnInvalidParamters(params)
+	}
+
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(err)
 		return err
@@ -238,7 +283,11 @@ func (sc *SignalClient) Logout() error {
 	}
 }
 
-func (sc *SignalClient) Services() error {
+func (sc *SignalClient) Services(params []string) error {
+	if len(params) != 0 {
+		return errFnInvalidParamters(params)
+	}
+
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(err)
 		return err
@@ -253,7 +302,11 @@ func (sc *SignalClient) Services() error {
 	}
 }
 
-func (sc *SignalClient) MyServices() error {
+func (sc *SignalClient) MyServices(params []string) error {
+	if len(params) != 0 {
+		return errFnInvalidParamters(params)
+	}
+
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(err)
 		return err
@@ -267,7 +320,13 @@ func (sc *SignalClient) MyServices() error {
 	}
 }
 
-func (sc *SignalClient) JoinService(sid, pwd string) error {
+func (sc *SignalClient) JoinService(params []string) error {
+	if len(params) != 2 {
+		return errFnInvalidParamters(params)
+	}
+	sid := params[0]
+	pwd := params[1]
+
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(err)
 		return err
@@ -283,13 +342,19 @@ func (sc *SignalClient) JoinService(sid, pwd string) error {
 	}
 }
 
-func (sc *SignalClient) LeaveService(sid string) error {
+func (sc *SignalClient) LeaveService(params []string) error {
+	if len(params) != 1 {
+		return errFnInvalidParamters(params)
+	}
+	sid := params[0]
+
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(err)
 		return err
 	}
 
 	req := newSignalRequest(sc.id)
+	req.ServiceId = sid
 	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
 		return nil
 	} else {
@@ -297,13 +362,19 @@ func (sc *SignalClient) LeaveService(sid string) error {
 	}
 }
 
-func (sc *SignalClient) ShowService(sid string) error {
+func (sc *SignalClient) ShowService(params []string) error {
+	if len(params) != 1 {
+		return errFnInvalidParamters(params)
+	}
+	sid := params[0]
+
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(err)
 		return err
 	}
 
 	req := newSignalRequest(sc.id)
+	req.ServiceId = sid
 	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
 		return nil
 	} else {

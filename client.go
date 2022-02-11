@@ -6,19 +6,28 @@ import (
 	"os"
 	"strings"
 
+	util "github.com/PeterXu/goutil"
 	"github.com/c-bata/go-prompt"
 	"github.com/c-bata/go-prompt/completer"
 )
 
+type fnClientAction = func(params []string) error
+
 // listen in local port(tcp/udp) to receive data, feeding to source.
 func NewClient(sigaddr string) *Client {
-	c := &Client{}
+	c := &Client{
+		actions: make(map[string]fnClientAction),
+	}
 	c.Init(sigaddr)
+	c.TAG = "client"
 	return c
 }
 
 type Client struct {
-	signal *SignalClient
+	util.Logging
+
+	signal  *SignalClient
+	actions map[string]fnClientAction
 }
 
 func (c *Client) OnEvent(event SignalEvent) {
@@ -67,55 +76,11 @@ func (c *Client) Executor(s string) {
 }
 
 func (c *Client) GoRun(cmd string, params []string) error {
-	signal := c.signal
-	err := errors.New("invalid paramters")
-	switch cmd {
-	case "status":
-		if len(params) == 0 {
-			err = signal.Status()
-		}
-	case "connect":
-		if len(params) == 1 {
-			err = signal.Connect(params[0])
-		}
-	case "disconnect":
-		if len(params) == 0 {
-			err = signal.Disconnect()
-		}
-	case "register":
-		if len(params) == 2 {
-			err = signal.Register(params[0], params[1])
-		}
-	case "login":
-		if len(params) == 2 {
-			err = signal.Login(params[0], params[1])
-		}
-	case "logout":
-		if len(params) == 0 {
-			err = signal.Logout()
-		}
-	case "services":
-		if len(params) == 0 {
-			err = signal.Services()
-		}
-	case "myservices":
-		if len(params) == 0 {
-			err = signal.MyServices()
-		}
-	case "join-service":
-		if len(params) == 2 {
-			err = signal.JoinService(params[0], params[1])
-		}
-	case "leave-service":
-		if len(params) == 1 {
-			err = signal.LeaveService(params[0])
-		}
-	case "show-service":
-		if len(params) == 1 {
-			err = signal.ShowService(params[0])
-		}
+	if fn, ok := c.signal.actions[cmd]; ok {
+		return fn(params)
+	} else {
+		return errors.New("invalid command:" + cmd)
 	}
-	return err
 }
 
 /**
