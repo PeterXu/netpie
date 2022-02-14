@@ -81,10 +81,10 @@ func (e *SignalEndpoint) Executor(line string) {
 	}
 }
 
-func (e *SignalEndpoint) GoRun(cmd string, params []string) error {
-	if fn, ok := e.signal.actions[cmd]; ok {
-		return fn(params)
+func (e *SignalEndpoint) GoRun(action string, params []string) error {
+	if fn, ok := e.signal.actions[action]; ok {
+		return fn(action, params)
 	} else {
-		return errors.New("invalid command:" + cmd)
+		return errors.New("invalid action:" + action)
 	}
 }

@@ -14,18 +14,23 @@ import (
  *  b. outgoing: send SignalResponse -> data -> ...,
  */
 
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
+
 const (
-	writeWait      = 10 * time.Second
+	writeWait      = 3 * time.Second
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 1024
 )
 
 type SignalConnection struct {
-	ss   *SignalServer
-	conn *websocket.Conn
-	send chan *SignalResponse
-	id   string
+	ss      *SignalServer
+	conn    *websocket.Conn
+	ch_send chan *SignalResponse
+	id      string
 }
 
 func (c SignalConnection) String() string {
@@ -85,7 +90,7 @@ func (c *SignalConnection) writePump() {
 
 	for {
 		select {
-		case resp, ok := <-c.send:
+		case resp, ok := <-c.ch_send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				// The server closed the channel.
@@ -117,9 +122,9 @@ func serveWs(ss *SignalServer, w http.ResponseWriter, r *http.Request) {
 	}
 
 	sconn := &SignalConnection{
-		ss:   ss,
-		conn: conn,
-		send: make(chan *SignalResponse),
+		ss:      ss,
+		conn:    conn,
+		ch_send: make(chan *SignalResponse),
 	}
 	ss.ch_connect <- sconn
 

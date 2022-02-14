@@ -31,14 +31,16 @@ func (cc *ShellCompleter) InitClient() {
 		{Text: "status", Description: "usage: status (show status to sigserver)"},
 		{Text: "connect", Description: "usage: connect sigaddr (to sigserver)"},
 		{Text: "disconnect", Description: "usage: disconnect (to sigserver)"},
+
 		{Text: "register", Description: "usage: register id pwd"},
 		{Text: "login", Description: "usage: login id pwd"},
 		{Text: "logout", Description: "usage: logout"},
+
 		{Text: "services", Description: "usage: services (list all services)"},
 		{Text: "myservices", Description: "usage: myservices (list joined services)"},
+		{Text: "show-service", Description: "usage: show-service serviceName (show service info)"},
 		{Text: "join-service", Description: "usage: join-service serviceName pwd"},
 		{Text: "leave-service", Description: "usage: leave-service serviceName"},
-		{Text: "show-service", Description: "usage: show-service serviceName (show service info)"},
 	}
 }
 
@@ -47,15 +49,17 @@ func (cc *ShellCompleter) InitServer() {
 		{Text: "status", Description: "usage: status (show status to sigserver)"},
 		{Text: "connect", Description: "usage: connect sigaddr (to sigserver)"},
 		{Text: "disconnect", Description: "usage: disconnect (to sigserver)"},
+
 		{Text: "register", Description: "usage: register id pwd"},
 		{Text: "login", Description: "usage: login id pwd"},
 		{Text: "logout", Description: "usage: logout"},
+
 		{Text: "myservices", Description: "usage: myservices (list my services)"},
-		{Text: "create-service", Description: "usage: create-service serviceName pwd"},
-		{Text: "remove-service", Description: "usage: remove-service serviceName pwd"},
-		{Text: "start-service", Description: "usage: start-service serviceName pwd"},
-		{Text: "stop-service", Description: "usage: stop-service serviceName"},
 		{Text: "show-service", Description: "usage: show-service serviceName (show service info)"},
+		{Text: "create-service", Description: "usage: create-service serviceName pwd description}"},
+		{Text: "remove-service", Description: "usage: remove-service serviceName (only owner)"},
+		{Text: "start-service", Description: "usage: start-service serviceName (only owner)"},
+		{Text: "stop-service", Description: "usage: stop-service serviceName (only owner)"},
 	}
 }
 

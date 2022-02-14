@@ -10,27 +10,17 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type fnSignalClientAction = func(params []string) error
-
 /**
  * Signal client
  */
-
-type NetworkStatus int
-
-const (
-	kNetworkUnknown NetworkStatus = iota
-	kNetworkConnecting
-	kNetworkConnected
-	kNetworkDisconnected
-)
+type fnSignalClientAction = func(action string, params []string) error
 
 func NewSignalClient(cb SignalEventCallback) *SignalClient {
 	client := &SignalClient{
 		cb:      cb,
-		send:    make(chan *SignalMessage),
+		ch_send: make(chan *SignalMessage),
 		pending: make(map[string]*SignalMessage),
-		exit:    make(chan error),
+		ch_exit: make(chan error),
 		actions: make(map[string]fnSignalClientAction),
 	}
 
@@ -38,14 +28,21 @@ func NewSignalClient(cb SignalEventCallback) *SignalClient {
 	client.actions["status"] = client.Status
 	client.actions["connect"] = client.Connect
 	client.actions["disconnect"] = client.Disconnect
+
 	client.actions["register"] = client.Register
 	client.actions["login"] = client.Login
 	client.actions["logout"] = client.Logout
+
 	client.actions["services"] = client.Services
 	client.actions["myservices"] = client.MyServices
+	client.actions["show-service"] = client.ShowService
+
 	client.actions["join-service"] = client.JoinService
 	client.actions["leave-service"] = client.LeaveService
-	client.actions["show-service"] = client.ShowService
+	client.actions["create-service"] = client.CreateService
+	client.actions["remove-service"] = client.RemoveService
+	client.actions["start-service"] = client.StartService
+	client.actions["stop-service"] = client.StopService
 
 	return client
 }
@@ -55,9 +52,9 @@ type SignalClient struct {
 
 	id      string
 	cb      SignalEventCallback
-	send    chan *SignalMessage
+	ch_send chan *SignalMessage
 	pending map[string]*SignalMessage
-	exit    chan error
+	ch_exit chan error
 
 	network NetworkStatus
 	online  bool
@@ -67,6 +64,10 @@ type SignalClient struct {
 
 func (sc *SignalClient) Start() {
 	go func() {
+		defer func() {
+			sc.network = kNetworkDisconnected
+		}()
+
 		for {
 			addr := sc.sigaddr
 			sc.Println("client connecting", addr)
@@ -79,7 +80,6 @@ func (sc *SignalClient) Start() {
 				return
 			}
 		}
-		sc.network = kNetworkDisconnected
 	}()
 }
 
@@ -104,7 +104,7 @@ func (sc *SignalClient) Run(addr string) error {
 		for {
 			if _, data, err := c.ReadMessage(); err != nil {
 				sc.Println("read, recv fail", err)
-				sc.exit <- err
+				sc.ch_exit <- err
 				return
 			} else {
 				sc.Println("read, recv len", len(data))
@@ -113,12 +113,18 @@ func (sc *SignalClient) Run(addr string) error {
 					sc.Println("read, decode fail", err)
 				} else {
 					sequence := resp.Sequence
-					if item, ok := sc.pending[sequence]; ok {
-						sc.Println("read, response for seq", sequence)
-						item.ch_resp <- resp
-						delete(sc.pending, sequence)
+					if len(resp.Event) == 0 {
+						// this is request-response
+						if item, ok := sc.pending[sequence]; ok {
+							sc.Println("read, response for seq", sequence)
+							item.ch_resp <- resp
+							delete(sc.pending, sequence)
+						} else {
+							sc.Println("read, not found seq", sequence)
+						}
 					} else {
-						sc.Println("read, not found seq", sequence)
+						// this is server event
+						sc.Println("read, event data", resp)
 					}
 				}
 			}
@@ -128,10 +134,9 @@ func (sc *SignalClient) Run(addr string) error {
 	// write
 	for {
 		select {
-		case msg := <-sc.send:
+		case msg := <-sc.ch_send:
 			if buf, err := GobEncode(msg.req); err != nil {
 				sc.Printf("write, encode fail: %v\n", err)
-				break
 			} else {
 				if err := c.WriteMessage(websocket.BinaryMessage, buf.Bytes()); err != nil {
 					sc.Printf("write, send fail: %v\n", err)
@@ -139,7 +144,7 @@ func (sc *SignalClient) Run(addr string) error {
 				}
 				sc.pending[msg.req.Sequence] = msg
 			}
-		case err := <-sc.exit:
+		case err := <-sc.ch_exit:
 			return err
 		case <-ticker.C:
 			var seqs []string
@@ -154,231 +159,20 @@ func (sc *SignalClient) Run(addr string) error {
 			}
 		}
 	}
-
-	return nil
 }
 
 func (sc *SignalClient) Close() {
 	sc.Println("client close")
-	sc.exit <- nil
+	sc.ch_exit <- nil
 }
 
 func (sc *SignalClient) CheckOnline(expectOnline bool) error {
 	if sc.online && !expectOnline {
-		return errors.New(fmt.Sprintf("user %s is login", sc.id))
+		return fmt.Errorf("user %s is login", sc.id)
 	} else if !sc.online && expectOnline {
-		return errors.New(fmt.Sprintf("user %s not login", sc.id))
+		return fmt.Errorf("user %s not login", sc.id)
 	} else {
 		return nil
-	}
-}
-
-func (sc *SignalClient) Status(params []string) error {
-	if len(params) != 0 {
-		return errFnInvalidParamters(params)
-	}
-
-	switch sc.network {
-	case kNetworkConnecting:
-		fmt.Println("connecting")
-	case kNetworkConnected:
-		fmt.Println("connected")
-	case kNetworkDisconnected:
-		fmt.Println("disconnected")
-	default:
-		fmt.Println("other status=", sc.network)
-	}
-	return nil
-}
-
-func (sc *SignalClient) Connect(params []string) error {
-	if len(params) != 1 {
-		return errFnInvalidParamters(params)
-	}
-	sigaddr := params[1]
-
-	if sc.network == kNetworkConnecting || sc.network == kNetworkConnected {
-		fmt.Println("connecting/connected: you need to disconnect at first")
-	} else {
-		sc.sigaddr = sigaddr
-		sc.Start()
-	}
-	return nil
-}
-
-func (sc *SignalClient) Disconnect(params []string) error {
-	if len(params) != 0 {
-		return errFnInvalidParamters(params)
-	}
-	sc.Close()
-	return nil
-}
-
-func (sc *SignalClient) Register(params []string) error {
-	if len(params) != 2 {
-		return errFnInvalidParamters(params)
-	}
-	id := params[0]
-	pwd := params[1]
-
-	if err := sc.CheckOnline(false); err != nil {
-		fmt.Println(err)
-		return err
-	}
-
-	// md5sum(pwd), and server will stored re-md5 with salt
-	req := newSignalRequest(id)
-	req.PwdMd5 = MD5SumPwdGenerate(pwd)
-	req.Salt = RandomString(4)
-	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
-		fmt.Println("register success and now you could login")
-		return nil
-	} else {
-		return err
-	}
-}
-
-func (sc *SignalClient) Login(params []string) error {
-	if len(params) != 2 {
-		return errFnInvalidParamters(params)
-	}
-	id := params[0]
-	pwd := params[1]
-
-	if err := sc.CheckOnline(false); err != nil {
-		fmt.Println(err)
-		return err
-	}
-
-	// md5sum(pwd), and server will re-md5 with stored salt
-	req := newSignalRequest(id)
-	req.PwdMd5 = MD5SumPwdGenerate(pwd)
-	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
-		fmt.Println("login success")
-		sc.id = id
-		sc.online = true
-		return nil
-	} else {
-		return err
-	}
-}
-
-func (sc *SignalClient) Logout(params []string) error {
-	if len(params) != 0 {
-		return errFnInvalidParamters(params)
-	}
-
-	if err := sc.CheckOnline(true); err != nil {
-		fmt.Println(err)
-		return err
-	}
-
-	req := newSignalRequest(sc.id)
-	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
-		fmt.Println("logout success")
-		sc.online = false
-		return nil
-	} else {
-		return err
-	}
-}
-
-func (sc *SignalClient) Services(params []string) error {
-	if len(params) != 0 {
-		return errFnInvalidParamters(params)
-	}
-
-	if err := sc.CheckOnline(true); err != nil {
-		fmt.Println(err)
-		return err
-	}
-
-	req := newSignalRequest(sc.id)
-	if resp, err := sc.SendRequest(GoFunc(), req); err == nil {
-		fmt.Println(resp.Result)
-		return nil
-	} else {
-		return err
-	}
-}
-
-func (sc *SignalClient) MyServices(params []string) error {
-	if len(params) != 0 {
-		return errFnInvalidParamters(params)
-	}
-
-	if err := sc.CheckOnline(true); err != nil {
-		fmt.Println(err)
-		return err
-	}
-
-	req := newSignalRequest(sc.id)
-	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
-		return nil
-	} else {
-		return err
-	}
-}
-
-func (sc *SignalClient) JoinService(params []string) error {
-	if len(params) != 2 {
-		return errFnInvalidParamters(params)
-	}
-	sname := params[0]
-	pwd := params[1]
-
-	if err := sc.CheckOnline(true); err != nil {
-		fmt.Println(err)
-		return err
-	}
-
-	req := newSignalRequest(sc.id)
-	req.ServiceName = sname
-	req.ServicePwdMd5 = MD5SumPwdGenerate(pwd)
-	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
-		return nil
-	} else {
-		return err
-	}
-}
-
-func (sc *SignalClient) LeaveService(params []string) error {
-	if len(params) != 1 {
-		return errFnInvalidParamters(params)
-	}
-	sname := params[0]
-
-	if err := sc.CheckOnline(true); err != nil {
-		fmt.Println(err)
-		return err
-	}
-
-	req := newSignalRequest(sc.id)
-	req.ServiceName = sname
-	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
-		return nil
-	} else {
-		return err
-	}
-}
-
-func (sc *SignalClient) ShowService(params []string) error {
-	if len(params) != 1 {
-		return errFnInvalidParamters(params)
-	}
-	sname := params[0]
-
-	if err := sc.CheckOnline(true); err != nil {
-		fmt.Println(err)
-		return err
-	}
-
-	req := newSignalRequest(sc.id)
-	req.ServiceName = sname
-	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
-		return nil
-	} else {
-		return err
 	}
 }
 
@@ -396,7 +190,7 @@ func (sc *SignalClient) SendRequest(action string, req *SignalRequest) (*SignalR
 	msg := newSignalMessage()
 	msg.req = req
 	msg.ch_resp = ch_resp
-	sc.send <- msg
+	sc.ch_send <- msg
 
 	select {
 	case resp := <-ch_resp:
@@ -407,5 +201,224 @@ func (sc *SignalClient) SendRequest(action string, req *SignalRequest) (*SignalR
 		}
 	case <-ticker.C:
 		return nil, errors.New("request timeout")
+	}
+}
+
+/// network operations
+
+func (sc *SignalClient) Status(action string, params []string) error {
+	if len(params) != 0 {
+		return errFnInvalidParamters(params)
+	}
+
+	switch sc.network {
+	case kNetworkConnecting:
+		fmt.Println("connecting")
+	case kNetworkConnected:
+		fmt.Println("connected")
+	case kNetworkDisconnected:
+		fmt.Println("disconnected")
+	default:
+		fmt.Println("other status=", sc.network)
+	}
+	return nil
+}
+
+func (sc *SignalClient) Connect(action string, params []string) error {
+	if len(params) != 1 {
+		return errFnInvalidParamters(params)
+	}
+	sigaddr := params[1]
+
+	if sc.network == kNetworkConnecting || sc.network == kNetworkConnected {
+		fmt.Println("connecting/connected: you need to disconnect at first")
+	} else {
+		sc.sigaddr = sigaddr
+		sc.Start()
+	}
+	return nil
+}
+
+func (sc *SignalClient) Disconnect(action string, params []string) error {
+	if len(params) != 0 {
+		return errFnInvalidParamters(params)
+	}
+	sc.Close()
+	return nil
+}
+
+/// user operations
+
+func (sc *SignalClient) Register(action string, params []string) error {
+	if len(params) != 2 {
+		return errFnInvalidParamters(params)
+	}
+
+	if err := sc.CheckOnline(false); err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	// md5sum(pwd), and server will stored re-md5 with salt
+	req := newSignalRequest(params[0])
+	req.PwdMd5 = MD5SumPwdGenerate(params[1])
+	req.Salt = RandomString(4)
+	if _, err := sc.SendRequest(action, req); err == nil {
+		fmt.Println("register success and now you could login")
+		return nil
+	} else {
+		return err
+	}
+}
+
+func (sc *SignalClient) Login(action string, params []string) error {
+	if len(params) != 2 {
+		return errFnInvalidParamters(params)
+	}
+
+	if err := sc.CheckOnline(false); err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	// md5sum(pwd), and server will re-md5 with stored salt
+	req := newSignalRequest(params[0])
+	req.PwdMd5 = MD5SumPwdGenerate(params[1])
+	if _, err := sc.SendRequest(action, req); err == nil {
+		fmt.Println("login success")
+		sc.id = req.FromId
+		sc.online = true
+		return nil
+	} else {
+		return err
+	}
+}
+
+func (sc *SignalClient) Logout(action string, params []string) error {
+	if len(params) != 0 {
+		return errFnInvalidParamters(params)
+	}
+
+	if err := sc.CheckOnline(true); err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	req := newSignalRequest(sc.id)
+	if _, err := sc.SendRequest(action, req); err == nil {
+		fmt.Println("logout success")
+		sc.online = false
+		return nil
+	} else {
+		return err
+	}
+}
+
+/// service operations
+
+func (sc *SignalClient) Services(action string, params []string) error {
+	return sc.ControlService(action, params, 0)
+}
+
+func (sc *SignalClient) MyServices(action string, params []string) error {
+	return sc.ControlService(action, params, 0)
+}
+
+func (sc *SignalClient) ShowService(action string, params []string) error {
+	return sc.ControlService(action, params, 1)
+}
+
+func (sc *SignalClient) JoinService(action string, params []string) error {
+	return sc.ControlService(action, params, 2)
+}
+
+func (sc *SignalClient) LeaveService(action string, params []string) error {
+	return sc.ControlService(action, params, 1)
+}
+
+func (sc *SignalClient) CreateService(action string, params []string) error {
+	return sc.ControlService(action, params, 3)
+}
+
+func (sc *SignalClient) RemoveService(action string, params []string) error {
+	return sc.ControlService(action, params, 1)
+}
+
+func (sc *SignalClient) StartService(action string, params []string) error {
+	return sc.ControlService(action, params, 1)
+}
+
+func (sc *SignalClient) StopService(action string, params []string) error {
+	return sc.ControlService(action, params, 1)
+}
+
+func (sc *SignalClient) ControlService(action string, params []string, count int) error {
+	if len(params) < count {
+		return errFnInvalidParamters(params)
+	}
+
+	if err := sc.CheckOnline(true); err != nil {
+		fmt.Println(action, err)
+		return err
+	}
+
+	req := newSignalRequest(sc.id)
+	if count >= 1 {
+		req.ServiceName = params[0]
+	}
+	if count >= 2 {
+		req.ServicePwdMd5 = MD5SumPwdGenerate(params[1])
+		if action == "CreateService" {
+			req.ServiceSalt = RandomString(4)
+		}
+	}
+	if count >= 3 {
+		req.ServiceDesc = params[2]
+	}
+
+	if resp, err := sc.SendRequest(action, req); err == nil {
+		fmt.Println(resp)
+		return nil
+	} else {
+		return err
+	}
+}
+
+/// ice message
+
+func (sc *SignalClient) SendIceCandidate(candidate string, serviceName string) error {
+	action := "ice-candidate"
+	if err := sc.CheckOnline(true); err != nil {
+		fmt.Println(action, err)
+		return err
+	}
+
+	req := newSignalRequest(sc.id)
+	req.IceCandidate = candidate
+	req.ServiceName = serviceName
+	if resp, err := sc.SendRequest(action, req); err == nil {
+		fmt.Println(resp)
+		return nil
+	} else {
+		return err
+	}
+}
+
+func (sc *SignalClient) SendIceAuth(ufrag, pwd string, serviceName string) error {
+	action := "ice-auth"
+	if err := sc.CheckOnline(true); err != nil {
+		fmt.Println(action, err)
+		return err
+	}
+
+	req := newSignalRequest(sc.id)
+	req.IceUfrag = ufrag
+	req.IcePwd = pwd
+	req.ServiceName = serviceName
+	if resp, err := sc.SendRequest(action, req); err == nil {
+		fmt.Println(resp)
+		return nil
+	} else {
+		return err
 	}
 }

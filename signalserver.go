@@ -7,48 +7,11 @@ import (
 	"time"
 
 	util "github.com/PeterXu/goutil"
-	"github.com/gorilla/websocket"
 )
 
-type fnSignalServerAction = func(req *SignalRequest, resp *SignalResponse) error
-
 /**
- * Signal peer
+ * Signal database for storage
  */
-func newSignalPeer(id string, pwd_md5, salt string) *SignalPeer {
-	return &SignalPeer{
-		Id:         id,
-		PwdMd5:     pwd_md5,
-		Salt:       salt,
-		InServices: make(map[string]bool),
-	}
-}
-
-type SignalPeer struct {
-	Id         string
-	PwdMd5     string
-	Salt       string
-	InServices map[string]bool // id=>..
-}
-
-/**
- * Signal service
- */
-func newSignalService() *SignalService {
-	return &SignalService{
-		Ctime: NowTimeMs(),
-	}
-}
-
-type SignalService struct {
-	Name        string
-	Description string
-	Owner       string
-	PwdMd5      string `json:"-"`
-	Salt        string `json:"-"`
-	Ctime       int64  `json:"-"`
-}
-
 type SignalDatabase struct {
 	Peers    map[string]*SignalPeer    // id=>..
 	Services map[string]*SignalService // name=>..
@@ -57,6 +20,8 @@ type SignalDatabase struct {
 /**
  * Signal server, manage all peers/services
  */
+type fnSignalServerAction = func(req *SignalRequest, resp *SignalResponse) error
+
 func NewSignalServer() *SignalServer {
 	server := &SignalServer{
 		db: &SignalDatabase{
@@ -77,11 +42,23 @@ func NewSignalServer() *SignalServer {
 	server.actions["register"] = server.Register
 	server.actions["login"] = server.Login
 	server.actions["logout"] = server.Logout
+
 	server.actions["services"] = server.Services
 	server.actions["myservices"] = server.MyServices
+	server.actions["show-service"] = server.ShowService
+
 	server.actions["join-service"] = server.JoinService
 	server.actions["leave-service"] = server.LeaveService
-	server.actions["show-service"] = server.ShowService
+	server.actions["create-service"] = server.CreateService
+	server.actions["remove-service"] = server.RemoveService
+	server.actions["start-service"] = server.StartService
+	server.actions["stop-service"] = server.StopService
+
+	// ice-relative
+	server.actions["ice-candidate"] = server.OnIceCandidate
+	server.actions["ice-auth"] = server.OnIceAuth
+	server.actions["ice-close"] = server.OnIceClose
+
 	return server
 }
 
@@ -97,11 +74,6 @@ type SignalServer struct {
 	connections map[*SignalConnection]bool
 	onlines     map[string]*SignalConnection // uid => ..
 	actions     map[string]fnSignalServerAction
-}
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
 }
 
 func (ss *SignalServer) Start(addr string) {
@@ -129,11 +101,9 @@ func (ss *SignalServer) Run() {
 			if _, ok := ss.connections[conn]; ok {
 				delete(ss.connections, conn)
 			} else {
-				if _, ok := ss.onlines[conn.id]; ok {
-					delete(ss.onlines, conn.id)
-				}
+				delete(ss.onlines, conn.id)
 			}
-			close(conn.send)
+			close(conn.ch_send)
 		case msg := <-ss.ch_receive:
 			ss.Printf("receive request from connection:%v\n", msg.req.conn)
 			ss.OnMessage(msg.req)
@@ -158,11 +128,27 @@ func (ss *SignalServer) SyncFromStorage() {
 	}
 }
 
-func (ss *SignalServer) CheckOnline(id string) error {
+func (ss *SignalServer) CheckOnline(id string) (*SignalPeer, error) {
 	if _, ok := ss.onlines[id]; ok {
-		return nil
+		if peer, ok := ss.db.Peers[id]; !ok {
+			return nil, errFnPeerNotFound(id)
+		} else {
+			return peer, nil
+		}
 	} else {
-		return errFnPeerNotLogin(id)
+		return nil, errFnPeerNotLogin(id)
+	}
+}
+
+func (ss *SignalServer) CheckOnlineConn(id string) (*SignalConnection, error) {
+	if conn, ok := ss.onlines[id]; ok {
+		if _, ok := ss.db.Peers[id]; !ok {
+			return nil, errFnPeerNotFound(id)
+		} else {
+			return conn, nil
+		}
+	} else {
+		return nil, errFnPeerNotLogin(id)
 	}
 }
 
@@ -174,17 +160,23 @@ func (ss *SignalServer) OnMessage(req *SignalRequest) {
 	} else {
 		err = errors.New("invalid action: " + req.Action)
 	}
+
 	if err != nil {
 		ss.Printf("process message err: %v, conn: %v\n", err, req.conn)
 	}
 
 	resp.Error = err
-	req.conn.send <- resp
+	if resp.conn != nil {
+		req.conn.ch_send <- newSignalResponse(req.Sequence)
+		resp.conn.ch_send <- resp
+	} else {
+		req.conn.ch_send <- resp
+	}
 }
 
 func (ss *SignalServer) Register(req *SignalRequest, resp *SignalResponse) error {
 	if len(req.FromId) < 10 {
-		return errFnPeerInvalidId(req.FromId)
+		return errFnInvalidId(req.FromId)
 	}
 
 	if len(req.PwdMd5) < 36 || len(req.Salt) < 4 {
@@ -195,7 +187,7 @@ func (ss *SignalServer) Register(req *SignalRequest, resp *SignalResponse) error
 		return errFnPeerExist(req.FromId)
 	} else {
 		new_pwd_md5 := MD5SumPwdSaltGenerate(req.PwdMd5, req.Salt)
-		peer := newSignalPeer(req.FromId, new_pwd_md5, req.Salt)
+		peer := NewSignalPeer(req.FromId, new_pwd_md5, req.Salt)
 		ss.db.Peers[req.FromId] = peer
 		ss.SyncToStorage()
 		return nil
@@ -212,17 +204,13 @@ func (ss *SignalServer) Login(req *SignalRequest, resp *SignalResponse) error {
 		if !MD5SumPwdSaltVerify(req.PwdMd5, peer.PwdMd5, peer.Salt) {
 			return errFnWrongPwd(req.PwdMd5 + ":" + peer.Salt + " != " + peer.PwdMd5)
 		}
-		for id, _ := range peer.InServices {
-			peer.InServices[id] = false
-		}
-	}
 
-	conn.id = req.FromId
-	if _, ok := ss.connections[conn]; ok {
+		// move from pending connections to onlines
+		conn.id = req.FromId
 		delete(ss.connections, conn)
+		ss.onlines[conn.id] = conn
+		return nil
 	}
-	ss.onlines[conn.id] = conn
-	return nil
 }
 
 func (ss *SignalServer) Logout(req *SignalRequest, resp *SignalResponse) error {
@@ -239,24 +227,20 @@ func (ss *SignalServer) Logout(req *SignalRequest, resp *SignalResponse) error {
 
 // return all services
 func (ss *SignalServer) Services(req *SignalRequest, resp *SignalResponse) error {
-	if err := ss.CheckOnline(req.FromId); err != nil {
+	if _, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	}
 
-	for id, _ := range ss.db.Services {
+	for id := range ss.db.Services {
 		resp.Result = append(resp.Result, id)
 	}
 	return nil
 }
 
-// return joined services
+// return joined/created services
 func (ss *SignalServer) MyServices(req *SignalRequest, resp *SignalResponse) error {
-	if err := ss.CheckOnline(req.FromId); err != nil {
+	if peer, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
-	}
-
-	if peer, ok := ss.db.Peers[req.FromId]; !ok {
-		return errFnPeerNotFound(req.FromId)
 	} else {
 		for id, ok := range peer.InServices {
 			if ok {
@@ -267,17 +251,30 @@ func (ss *SignalServer) MyServices(req *SignalRequest, resp *SignalResponse) err
 	}
 }
 
-func (ss *SignalServer) JoinService(req *SignalRequest, resp *SignalResponse) error {
-	if err := ss.CheckOnline(req.FromId); err != nil {
+func (ss *SignalServer) ShowService(req *SignalRequest, resp *SignalResponse) error {
+	if _, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	}
 
-	if peer, ok := ss.db.Peers[req.FromId]; !ok {
-		return errFnPeerNotFound(req.FromId)
+	if item, ok := ss.db.Services[req.ServiceName]; !ok {
+		return errFnServiceNotExist(req.ServiceName)
+	} else {
+		resp.Result = append(resp.Result, JsonEncode(item))
+		return nil
+	}
+}
+
+func (ss *SignalServer) JoinService(req *SignalRequest, resp *SignalResponse) error {
+	if peer, err := ss.CheckOnline(req.FromId); err != nil {
+		return err
 	} else {
 		if item, ok := ss.db.Services[req.ServiceName]; !ok {
-			return errFnServiceNotFound(req.ServiceName)
+			return errFnServiceNotExist(req.ServiceName)
 		} else {
+			if item.Owner == req.FromId {
+				return errFnServiceInvalid("join not allowed")
+			}
+
 			if !MD5SumPwdSaltVerify(req.ServicePwdMd5, item.PwdMd5, item.Salt) {
 				return errFnWrongPwd(req.ServicePwdMd5 + ":" + item.Salt + " != " + item.PwdMd5)
 			}
@@ -289,25 +286,132 @@ func (ss *SignalServer) JoinService(req *SignalRequest, resp *SignalResponse) er
 }
 
 func (ss *SignalServer) LeaveService(req *SignalRequest, resp *SignalResponse) error {
-	if err := ss.CheckOnline(req.FromId); err != nil {
+	if peer, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
-	}
-
-	if peer, ok := ss.db.Peers[req.FromId]; ok {
+	} else {
 		peer.InServices[req.ServiceName] = false
 	}
 	return nil
 }
 
-func (ss *SignalServer) ShowService(req *SignalRequest, resp *SignalResponse) error {
-	if err := ss.CheckOnline(req.FromId); err != nil {
+func (ss *SignalServer) CreateService(req *SignalRequest, resp *SignalResponse) error {
+	if len(req.ServiceName) == 0 {
+		return errFnServiceInvalidName(req.ServiceName)
+	}
+
+	if len(req.ServicePwdMd5) < 36 || len(req.ServiceSalt) < 4 {
+		return errFnInvalidPwd(req.ServicePwdMd5 + ":" + req.ServiceSalt)
+	}
+
+	if _, err := ss.CheckOnline(req.FromId); err != nil {
+		return err
+	} else {
+		if _, ok := ss.db.Services[req.ServiceName]; ok {
+			return errFnServiceExist(req.ServiceName)
+		} else {
+			service := NewSignalService(req.ServiceName, req.FromId)
+			service.Description = req.ServiceDesc
+			service.PwdMd5 = MD5SumPwdSaltGenerate(req.ServicePwdMd5, req.ServiceSalt)
+			service.Salt = req.ServiceSalt
+			ss.db.Services[req.ServiceName] = service
+			return nil
+		}
+	}
+}
+
+func (ss *SignalServer) RemoveService(req *SignalRequest, resp *SignalResponse) error {
+	if _, err := ss.CheckOnline(req.FromId); err != nil {
+		return err
+	} else {
+		if service, ok := ss.db.Services[req.ServiceName]; ok {
+			if service.Owner != req.FromId {
+				return errFnServiceNotOwner(req.FromId)
+			}
+			delete(ss.db.Services, req.ServiceName)
+
+			// TODO: notify online peers?
+			for _, item := range ss.db.Peers {
+				delete(item.InServices, req.ServiceName)
+			}
+		}
+		return nil
+	}
+}
+
+func (ss *SignalServer) StartService(req *SignalRequest, resp *SignalResponse) error {
+	if _, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	}
 
-	if item, ok := ss.db.Services[req.ServiceName]; !ok {
-		return errFnServiceNotFound(req.ServiceName)
+	if service, ok := ss.db.Services[req.ServiceName]; ok {
+		if service.Owner != req.FromId {
+			return errFnServiceNotOwner(req.FromId)
+		}
+		service.Started = true
+		// TODO: notify
+	}
+	return nil
+}
+
+func (ss *SignalServer) StopService(req *SignalRequest, resp *SignalResponse) error {
+	if _, err := ss.CheckOnline(req.FromId); err != nil {
+		return err
+	}
+
+	if service, ok := ss.db.Services[req.ServiceName]; ok {
+		if service.Owner != req.FromId {
+			return errFnServiceNotOwner(req.FromId)
+		}
+		service.Started = false
+		// TODO: notify
+	}
+	return nil
+}
+
+func (ss *SignalServer) OnIceCandidate(req *SignalRequest, resp *SignalResponse) error {
+	data := map[string]interface{}{
+		"candidate": req.IceCandidate,
+	}
+	return ss.ForwardServiceData(req, resp, JsonEncode(data))
+}
+
+func (ss *SignalServer) OnIceAuth(req *SignalRequest, resp *SignalResponse) error {
+	data := map[string]interface{}{
+		"ice-ufrag": req.IceUfrag,
+		"ice-pwd":   req.IcePwd,
+	}
+	return ss.ForwardServiceData(req, resp, JsonEncode(data))
+}
+
+func (ss *SignalServer) OnIceClose(req *SignalRequest, resp *SignalResponse) error {
+	data := map[string]interface{}{}
+	return ss.ForwardServiceData(req, resp, JsonEncode(data))
+}
+
+func (ss *SignalServer) ForwardServiceData(req *SignalRequest, resp *SignalResponse, jdata string) error {
+	if peer, err := ss.CheckOnline(req.FromId); err != nil {
+		return err
 	} else {
-		resp.Result = append(resp.Result, JsonEncode(item))
+		if service, ok := ss.db.Services[req.ServiceName]; !ok {
+			return errFnServiceNotExist(req.ServiceName)
+		} else {
+			var toId string
+			if service.Owner == req.FromId {
+				toId = req.ToId
+			} else {
+				if _, ok := peer.InServices[req.ServiceName]; !ok {
+					return errFnServiceNotJoin(req.ServiceName)
+				}
+				toId = service.Owner
+			}
+			if conn, err := ss.CheckOnlineConn(toId); err != nil {
+				return err
+			} else {
+				resp.Event = req.Action
+				resp.Result = []string{jdata}
+				resp.conn = conn
+			}
+		}
 		return nil
 	}
 }

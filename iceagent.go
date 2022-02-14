@@ -2,31 +2,44 @@ package main
 
 import (
 	"context"
-	"log"
 	"net"
-	"time"
 
+	util "github.com/PeterXu/goutil"
 	ice "github.com/pion/ice/v2"
-	"github.com/pion/randutil"
+)
+
+var (
+	defaultStunUrls = []string{"stun.voipbuster.com", "stun.wirlab.net"}
 )
 
 type IceAgent struct {
-	TAG           string
+	util.Logging
+	evObj         *EvObject
 	agent         *ice.Agent
 	isControlling bool
+	ch_send       chan []byte
+	ch_recv       chan []byte
+	ch_err        chan error
 }
 
-func NewIceAgent() *IceAgent {
-	return &IceAgent{
-		TAG: "ICE",
+func NewIceAgent(controlling bool) *IceAgent {
+	agent := &IceAgent{
+		evObj:         newEvObject(),
+		isControlling: controlling,
+		ch_send:       make(chan []byte),
+		ch_recv:       make(chan []byte),
+		ch_err:        make(chan error),
 	}
+	agent.TAG = "ice"
+	return agent
 }
 
-func (ic *IceAgent) init(urls []string) error {
-	log.Println("init agent", urls)
+func (a *IceAgent) Init(urls []string) error {
+	a.Println("init urls:", urls)
+
 	var iceUrls []*ice.URL
-	for i := range urls {
-		if url, err := ice.ParseURL(urls[i]); err == nil {
+	for _, item := range urls {
+		if url, err := ice.ParseURL(item); err == nil {
 			iceUrls = append(iceUrls, url)
 		}
 	}
@@ -43,34 +56,32 @@ func (ic *IceAgent) init(urls []string) error {
 
 	iceAgent, err := ice.NewAgent(iceConfig)
 	if err != nil {
-		log.Println(err)
+		a.Println(err)
 		return err
 	}
-
-	ic.agent = iceAgent
+	a.agent = iceAgent
 
 	// Event fired when new candidates gathered
 	if err = iceAgent.OnCandidate(func(c ice.Candidate) {
-		if c == nil {
-			return
+		if c != nil {
+			szval := c.Marshal()
+			a.evObj.fireEvent("ice-candidate", evData{"data": szval})
 		}
-		szval := c.Marshal()
-		fireEvent("ice-candidate", evData{"data": szval}, ic.TAG)
 	}); err != nil {
-		log.Println(err)
+		a.Println(err)
 		return err
 	}
 
 	// When ICE Connection state has change
 	if err = iceAgent.OnConnectionStateChange(func(c ice.ConnectionState) {
-		log.Println("ICE Connection State has changed: ", c.String())
+		a.Println("Connection State has changed: ", c.String())
 	}); err != nil {
 		return (err)
 	}
 
 	// Event fired when selected candidate-pair changed.
 	if err = iceAgent.OnSelectedCandidatePairChange(func(c1, c2 ice.Candidate) {
-		log.Println("ICE Selected CandidatePair has changed: ", c1.String(), c2.String())
+		a.Println("Selected CandidatePair has changed: ", c1.String(), c2.String())
 	}); err != nil {
 		return (err)
 	}
@@ -81,7 +92,7 @@ func (ic *IceAgent) init(urls []string) error {
 		return (err)
 	}
 
-	fireEvent("ice-auth", evData{"ufrag": localUfrag, "pwd": localPwd}, ic.TAG)
+	a.evObj.fireEvent("ice-auth", evData{"ufrag": localUfrag, "pwd": localPwd})
 
 	if err = iceAgent.GatherCandidates(); err != nil {
 		return (err)
@@ -90,13 +101,13 @@ func (ic *IceAgent) init(urls []string) error {
 	return nil
 }
 
-func (ic *IceAgent) start(remoteUfrag, remotePwd string) error {
+func (a *IceAgent) Start(remoteUfrag, remotePwd string) error {
 	// Start the ICE Agent. One side must be controlled, and the other must be controlling
-	iceAgent := ic.agent
+	iceAgent := a.agent
 
 	var err error
 	var conn net.Conn
-	if ic.isControlling {
+	if a.isControlling {
 		conn, err = iceAgent.Dial(context.TODO(), remoteUfrag, remotePwd)
 	} else {
 		conn, err = iceAgent.Accept(context.TODO(), remoteUfrag, remotePwd)
@@ -108,20 +119,18 @@ func (ic *IceAgent) start(remoteUfrag, remotePwd string) error {
 	// Send messages in a loop to the remote peer
 	go func() {
 		for {
-			time.Sleep(time.Second * 3)
-
-			val, err := randutil.GenerateCryptoRandomString(15,
-				"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-			if err != nil {
-				//panic(err)
+			select {
+			case data, ok := <-a.ch_send:
+				if !ok {
+					return
+				}
+				if _, err = conn.Write(data); err != nil {
+					return
+				}
+			case err := <-a.ch_err:
+				a.Println(err)
 				return
 			}
-			if _, err = conn.Write([]byte(val)); err != nil {
-				//panic(err)
-				return
-			}
-
-			log.Println("Sent: ", val)
 		}
 	}()
 
@@ -130,40 +139,37 @@ func (ic *IceAgent) start(remoteUfrag, remotePwd string) error {
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
-			//panic(err)
+			a.ch_err <- nil
 			return err
 		}
-
-		log.Println("Received: ", string(buf[:n]))
+		a.ch_recv <- buf[0:n]
 	}
-
-	return nil
 }
 
-func (ic *IceAgent) addRemoteCandidate(candidate string) error {
+func (a *IceAgent) AddRemoteCandidate(candidate string) error {
 	c, err := ice.UnmarshalCandidate(candidate)
 	if err != nil {
-		log.Println(err)
+		a.Println(err)
 		return err
 	}
 
-	if err := ic.agent.AddRemoteCandidate(c); err != nil {
-		log.Println(err)
+	if err := a.agent.AddRemoteCandidate(c); err != nil {
+		a.Println(err)
 		return err
 	}
 	return nil
 }
 
-func (ic *IceAgent) setRemoteCredentials(remoteUfrag, remotePwd string) error {
-	return ic.agent.SetRemoteCredentials(remoteUfrag, remotePwd)
+func (a *IceAgent) SetRemoteCredentials(remoteUfrag, remotePwd string) error {
+	return a.agent.SetRemoteCredentials(remoteUfrag, remotePwd)
 }
 
-func (ic *IceAgent) restartIce(ufrag, pwd string) error {
-	return ic.agent.Restart(ufrag, pwd)
+func (a *IceAgent) RestartIce(ufrag, pwd string) error {
+	return a.agent.Restart(ufrag, pwd)
 }
 
-func (ic *IceAgent) getLocalCandidates() {
+func (a *IceAgent) GetLocalCandidates() {
 }
 
-func (ic *IceAgent) getSelectedCandidatePair() {
+func (a *IceAgent) GetSelectedCandidatePair() {
 }

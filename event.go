@@ -4,8 +4,35 @@ import (
 	ev "github.com/gookit/event"
 )
 
+type evManager = ev.Manager
 type evEvent = ev.Event
 type evData = ev.M
+
+/// ev objects
+
+type EvObject struct {
+	*ev.Manager
+}
+
+func newEvObject() *EvObject {
+	return &EvObject{ev.NewManager("event")}
+}
+
+func (obj *EvObject) listenEvent(name string, listener ev.Listener) {
+	obj.Listen(name, listener, ev.Normal)
+}
+
+func (obj *EvObject) fireEvent(name string, params ev.M) {
+	obj.Fire(name, params)
+}
+
+func (obj *EvObject) asyncFireEvent(name string, params ev.M) {
+	go func() {
+		obj.Fire(name, params)
+	}()
+}
+
+/// ev managers
 
 var gEvManagers map[string]*ev.Manager
 
@@ -24,6 +51,10 @@ func getEvManager(key string, createIfNo bool) *ev.Manager {
 		}
 		return val
 	}
+}
+
+func delEvManager(key string) {
+	delete(gEvManagers, key)
 }
 
 func listenEvent(name string, listener ev.Listener, key string) {
