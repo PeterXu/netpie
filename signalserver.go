@@ -41,7 +41,6 @@ func newSignalService() *SignalService {
 }
 
 type SignalService struct {
-	Id          string
 	Name        string
 	Description string
 	Owner       string
@@ -51,8 +50,8 @@ type SignalService struct {
 }
 
 type SignalDatabase struct {
-	Peers    map[string]*SignalPeer
-	Services map[string]*SignalService
+	Peers    map[string]*SignalPeer    // id=>..
+	Services map[string]*SignalService // name=>..
 }
 
 /**
@@ -276,13 +275,13 @@ func (ss *SignalServer) JoinService(req *SignalRequest, resp *SignalResponse) er
 	if peer, ok := ss.db.Peers[req.FromId]; !ok {
 		return errFnPeerNotFound(req.FromId)
 	} else {
-		if item, ok := ss.db.Services[req.ServiceId]; !ok {
-			return errFnServiceNotFound(req.ServiceId)
+		if item, ok := ss.db.Services[req.ServiceName]; !ok {
+			return errFnServiceNotFound(req.ServiceName)
 		} else {
 			if !MD5SumPwdSaltVerify(req.ServicePwdMd5, item.PwdMd5, item.Salt) {
 				return errFnWrongPwd(req.ServicePwdMd5 + ":" + item.Salt + " != " + item.PwdMd5)
 			}
-			peer.InServices[req.ServiceId] = true
+			peer.InServices[req.ServiceName] = true
 		}
 	}
 
@@ -295,7 +294,7 @@ func (ss *SignalServer) LeaveService(req *SignalRequest, resp *SignalResponse) e
 	}
 
 	if peer, ok := ss.db.Peers[req.FromId]; ok {
-		peer.InServices[req.ServiceId] = false
+		peer.InServices[req.ServiceName] = false
 	}
 	return nil
 }
@@ -305,8 +304,8 @@ func (ss *SignalServer) ShowService(req *SignalRequest, resp *SignalResponse) er
 		return err
 	}
 
-	if item, ok := ss.db.Services[req.ServiceId]; !ok {
-		return errFnServiceNotFound(req.ServiceId)
+	if item, ok := ss.db.Services[req.ServiceName]; !ok {
+		return errFnServiceNotFound(req.ServiceName)
 	} else {
 		resp.Result = append(resp.Result, JsonEncode(item))
 		return nil

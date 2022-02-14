@@ -29,7 +29,7 @@ type SignalRequest struct {
 	FromId        string
 	PwdMd5        string
 	Salt          string
-	ServiceId     string
+	ServiceName   string
 	ServicePwdMd5 string
 	conn          *SignalConnection
 }

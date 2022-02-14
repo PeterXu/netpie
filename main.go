@@ -51,21 +51,26 @@ func main() {
 	}
 
 	ch := make(chan bool)
+	defer func() {
+		close(ch)
+	}()
+
 	switch os.Args[1] {
 	case "client":
 		clientFlags.Parse(os.Args[2:])
 		fmt.Println(client_signal_addr)
 		client := NewClient(client_signal_addr)
-		client.StartCli()
+		client.StartShell()
 	case "server":
 		serverFlags.Parse(os.Args[2:])
 		fmt.Println(server_signal_addr, server_listen_addr)
-		<-ch
+		server := NewServer(server_signal_addr)
+		server.StartShell()
 	case "signal":
 		signalFlags.Parse(os.Args[2:])
 		fmt.Println(signal_listen_addr)
-		server := NewSignalServer()
-		server.Start(signal_listen_addr)
+		signal := NewSignalServer()
+		signal.Start(signal_listen_addr)
 	default:
 		usage()
 		os.Exit(1)

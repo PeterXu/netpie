@@ -324,7 +324,7 @@ func (sc *SignalClient) JoinService(params []string) error {
 	if len(params) != 2 {
 		return errFnInvalidParamters(params)
 	}
-	sid := params[0]
+	sname := params[0]
 	pwd := params[1]
 
 	if err := sc.CheckOnline(true); err != nil {
@@ -333,7 +333,7 @@ func (sc *SignalClient) JoinService(params []string) error {
 	}
 
 	req := newSignalRequest(sc.id)
-	req.ServiceId = sid
+	req.ServiceName = sname
 	req.ServicePwdMd5 = MD5SumPwdGenerate(pwd)
 	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
 		return nil
@@ -346,7 +346,7 @@ func (sc *SignalClient) LeaveService(params []string) error {
 	if len(params) != 1 {
 		return errFnInvalidParamters(params)
 	}
-	sid := params[0]
+	sname := params[0]
 
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(err)
@@ -354,7 +354,7 @@ func (sc *SignalClient) LeaveService(params []string) error {
 	}
 
 	req := newSignalRequest(sc.id)
-	req.ServiceId = sid
+	req.ServiceName = sname
 	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
 		return nil
 	} else {
@@ -366,7 +366,7 @@ func (sc *SignalClient) ShowService(params []string) error {
 	if len(params) != 1 {
 		return errFnInvalidParamters(params)
 	}
-	sid := params[0]
+	sname := params[0]
 
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(err)
@@ -374,7 +374,7 @@ func (sc *SignalClient) ShowService(params []string) error {
 	}
 
 	req := newSignalRequest(sc.id)
-	req.ServiceId = sid
+	req.ServiceName = sname
 	if _, err := sc.SendRequest(GoFunc(), req); err == nil {
 		return nil
 	} else {
