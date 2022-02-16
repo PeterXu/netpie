@@ -114,7 +114,7 @@ func (ss *SignalServer) Run() {
 }
 
 func (ss *SignalServer) SyncToStorage() {
-	if buf, err := GobEncode(ss.db); err != nil {
+	if buf, err := util.GobEncode(ss.db); err != nil {
 		ss.Printf("syncTo err: %v\n", err)
 	} else {
 		_ = buf
@@ -123,7 +123,7 @@ func (ss *SignalServer) SyncToStorage() {
 
 func (ss *SignalServer) SyncFromStorage() {
 	var cached []byte
-	if err := GobDecode(cached, ss.db); err != nil {
+	if err := util.GobDecode(cached, ss.db); err != nil {
 		ss.Printf("syncFrom err:%v\n", err)
 	}
 }
@@ -186,7 +186,7 @@ func (ss *SignalServer) Register(req *SignalRequest, resp *SignalResponse) error
 	if _, ok := ss.db.Peers[req.FromId]; ok {
 		return errFnPeerExist(req.FromId)
 	} else {
-		new_pwd_md5 := MD5SumPwdSaltGenerate(req.PwdMd5, req.Salt)
+		new_pwd_md5 := util.MD5SumGenerate([]string{req.PwdMd5, req.Salt})
 		peer := NewSignalPeer(req.FromId, new_pwd_md5, req.Salt)
 		ss.db.Peers[req.FromId] = peer
 		ss.SyncToStorage()
@@ -201,7 +201,7 @@ func (ss *SignalServer) Login(req *SignalRequest, resp *SignalResponse) error {
 	if peer, ok := ss.db.Peers[req.FromId]; !ok {
 		return errFnPeerNotFound(req.FromId)
 	} else {
-		if !MD5SumPwdSaltVerify(req.PwdMd5, peer.PwdMd5, peer.Salt) {
+		if !util.MD5SumVerify([]string{req.PwdMd5, peer.Salt}, peer.PwdMd5) {
 			return errFnWrongPwd(req.PwdMd5 + ":" + peer.Salt + " != " + peer.PwdMd5)
 		}
 
@@ -259,7 +259,7 @@ func (ss *SignalServer) ShowService(req *SignalRequest, resp *SignalResponse) er
 	if item, ok := ss.db.Services[req.ServiceName]; !ok {
 		return errFnServiceNotExist(req.ServiceName)
 	} else {
-		resp.Result = append(resp.Result, JsonEncode(item))
+		resp.Result = append(resp.Result, util.JsonEncode(item))
 		return nil
 	}
 }
@@ -275,7 +275,7 @@ func (ss *SignalServer) JoinService(req *SignalRequest, resp *SignalResponse) er
 				return errFnServiceInvalid("join not allowed")
 			}
 
-			if !MD5SumPwdSaltVerify(req.ServicePwdMd5, item.PwdMd5, item.Salt) {
+			if !util.MD5SumVerify([]string{req.ServicePwdMd5, item.Salt}, item.PwdMd5) {
 				return errFnWrongPwd(req.ServicePwdMd5 + ":" + item.Salt + " != " + item.PwdMd5)
 			}
 			peer.InServices[req.ServiceName] = true
@@ -311,7 +311,7 @@ func (ss *SignalServer) CreateService(req *SignalRequest, resp *SignalResponse) 
 		} else {
 			service := NewSignalService(req.ServiceName, req.FromId)
 			service.Description = req.ServiceDesc
-			service.PwdMd5 = MD5SumPwdSaltGenerate(req.ServicePwdMd5, req.ServiceSalt)
+			service.PwdMd5 = util.MD5SumGenerate([]string{req.ServicePwdMd5, req.ServiceSalt})
 			service.Salt = req.ServiceSalt
 			ss.db.Services[req.ServiceName] = service
 			return nil
@@ -372,7 +372,7 @@ func (ss *SignalServer) OnIceCandidate(req *SignalRequest, resp *SignalResponse)
 	data := map[string]interface{}{
 		"candidate": req.IceCandidate,
 	}
-	return ss.ForwardServiceData(req, resp, JsonEncode(data))
+	return ss.ForwardServiceData(req, resp, util.JsonEncode(data))
 }
 
 func (ss *SignalServer) OnIceAuth(req *SignalRequest, resp *SignalResponse) error {
@@ -380,12 +380,12 @@ func (ss *SignalServer) OnIceAuth(req *SignalRequest, resp *SignalResponse) erro
 		"ice-ufrag": req.IceUfrag,
 		"ice-pwd":   req.IcePwd,
 	}
-	return ss.ForwardServiceData(req, resp, JsonEncode(data))
+	return ss.ForwardServiceData(req, resp, util.JsonEncode(data))
 }
 
 func (ss *SignalServer) OnIceClose(req *SignalRequest, resp *SignalResponse) error {
 	data := map[string]interface{}{}
-	return ss.ForwardServiceData(req, resp, JsonEncode(data))
+	return ss.ForwardServiceData(req, resp, util.JsonEncode(data))
 }
 
 func (ss *SignalServer) ForwardServiceData(req *SignalRequest, resp *SignalResponse, jdata string) error {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	util "github.com/PeterXu/goutil"
 	"github.com/gorilla/websocket"
 )
 
@@ -69,7 +70,7 @@ func (c *SignalConnection) readPump() {
 		}
 
 		req := newSignalRequest("")
-		if err := GobDecode(data, req); err != nil {
+		if err := util.GobDecode(data, req); err != nil {
 			c.ss.Printf("conn, decode error: %v\n", err)
 		} else {
 			req.conn = c
@@ -97,7 +98,7 @@ func (c *SignalConnection) writePump() {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			if buf, err := GobEncode(resp); err != nil {
+			if buf, err := util.GobEncode(resp); err != nil {
 				c.ss.Printf("conn, encode err: %v\n", err)
 			} else {
 				if err := c.conn.WriteMessage(websocket.BinaryMessage, buf.Bytes()); err != nil {

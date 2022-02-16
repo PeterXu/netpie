@@ -1,5 +1,7 @@
 package main
 
+import util "github.com/PeterXu/goutil"
+
 /**
  * Network status
  */
@@ -76,7 +78,7 @@ type SignalResponse struct {
  */
 func newSignalMessage() *SignalMessage {
 	return &SignalMessage{
-		ctime: NowTimeMs(),
+		ctime: util.NowMs(),
 	}
 }
 
@@ -112,7 +114,7 @@ func NewSignalService(name, id string) *SignalService {
 	return &SignalService{
 		Name:  name,
 		Owner: id,
-		Ctime: NowTimeMs(),
+		Ctime: util.NowMs(),
 	}
 }
 

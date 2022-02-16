@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	util "github.com/PeterXu/goutil"
 	"github.com/c-bata/go-prompt"
 	"github.com/c-bata/go-prompt/completer"
 )
@@ -34,7 +35,7 @@ func (e *SignalEndpoint) Init(sigaddr string, cb SignalEventCallback) {
 func (e *SignalEndpoint) StartShell(title string) {
 	fmt.Println("Please use `exit` or `Ctrl-D` to exit this program.")
 	defer fmt.Println("Bye!")
-	defer HandleTTYOnExit()
+	defer util.HandleTTYOnExit()
 
 	cc := newShellCompleter()
 	cc.Init(title)

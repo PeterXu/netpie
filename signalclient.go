@@ -109,7 +109,7 @@ func (sc *SignalClient) Run(addr string) error {
 			} else {
 				sc.Println("read, recv len", len(data))
 				resp := &SignalResponse{}
-				if err := GobDecode(data, resp); err != nil {
+				if err := util.GobDecode(data, resp); err != nil {
 					sc.Println("read, decode fail", err)
 				} else {
 					sequence := resp.Sequence
@@ -135,7 +135,7 @@ func (sc *SignalClient) Run(addr string) error {
 	for {
 		select {
 		case msg := <-sc.ch_send:
-			if buf, err := GobEncode(msg.req); err != nil {
+			if buf, err := util.GobEncode(msg.req); err != nil {
 				sc.Printf("write, encode fail: %v\n", err)
 			} else {
 				if err := c.WriteMessage(websocket.BinaryMessage, buf.Bytes()); err != nil {
@@ -148,7 +148,7 @@ func (sc *SignalClient) Run(addr string) error {
 			return err
 		case <-ticker.C:
 			var seqs []string
-			nowTime := NowTimeMs()
+			nowTime := util.NowMs()
 			for k, v := range sc.pending {
 				if nowTime > v.ctime+5*1000 {
 					seqs = append(seqs, k)
@@ -178,7 +178,7 @@ func (sc *SignalClient) CheckOnline(expectOnline bool) error {
 
 func (sc *SignalClient) SendRequest(action string, req *SignalRequest) (*SignalResponse, error) {
 	req.Action = action
-	req.Sequence = RandomString(24)
+	req.Sequence = util.RandomString(24)
 
 	ticker := time.NewTicker(3 * time.Second)
 	ch_resp := make(chan *SignalResponse)
@@ -261,8 +261,8 @@ func (sc *SignalClient) Register(action string, params []string) error {
 
 	// md5sum(pwd), and server will stored re-md5 with salt
 	req := newSignalRequest(params[0])
-	req.PwdMd5 = MD5SumPwdGenerate(params[1])
-	req.Salt = RandomString(4)
+	req.PwdMd5 = util.MD5SumGenerate([]string{params[1]})
+	req.Salt = util.RandomString(4)
 	if _, err := sc.SendRequest(action, req); err == nil {
 		fmt.Println("register success and now you could login")
 		return nil
@@ -283,7 +283,7 @@ func (sc *SignalClient) Login(action string, params []string) error {
 
 	// md5sum(pwd), and server will re-md5 with stored salt
 	req := newSignalRequest(params[0])
-	req.PwdMd5 = MD5SumPwdGenerate(params[1])
+	req.PwdMd5 = util.MD5SumGenerate([]string{params[1]})
 	if _, err := sc.SendRequest(action, req); err == nil {
 		fmt.Println("login success")
 		sc.id = req.FromId
@@ -367,9 +367,9 @@ func (sc *SignalClient) ControlService(action string, params []string, count int
 		req.ServiceName = params[0]
 	}
 	if count >= 2 {
-		req.ServicePwdMd5 = MD5SumPwdGenerate(params[1])
+		req.ServicePwdMd5 = util.MD5SumGenerate([]string{params[1]})
 		if action == "CreateService" {
-			req.ServiceSalt = RandomString(4)
+			req.ServiceSalt = util.RandomString(4)
 		}
 	}
 	if count >= 3 {

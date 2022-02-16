@@ -7,19 +7,6 @@ import (
 	"os"
 )
 
-// export TestNetPie
-func TestNetPie() {
-	println("export Test")
-	println(GoFunc())
-}
-
-type TestStruct struct {
-}
-
-func (t *TestStruct) PrintStruct() {
-	println(GoFunc())
-}
-
 func main() {
 	var client_signal_addr string
 	clientFlags := flag.NewFlagSet("client", flag.ExitOnError)
