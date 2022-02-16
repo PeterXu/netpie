@@ -15,51 +15,54 @@ import (
  */
 type fnSignalClientAction = func(action string, params []string) error
 
-func NewSignalClient(cb SignalEventCallback) *SignalClient {
+func NewSignalClient() *SignalClient {
 	client := &SignalClient{
-		cb:      cb,
-		ch_send: make(chan *SignalMessage),
-		pending: make(map[string]*SignalMessage),
-		ch_exit: make(chan error),
-		actions: make(map[string]fnSignalClientAction),
+		EvObject: NewEvObject(),
+		ch_send:  make(chan *SignalMessage),
+		ch_exit:  make(chan error),
+		pending:  make(map[string]*SignalMessage),
+		actions:  make(map[string]fnSignalClientAction),
 	}
 
 	client.TAG = "sigclient"
-	client.actions["status"] = client.Status
-	client.actions["connect"] = client.Connect
-	client.actions["disconnect"] = client.Disconnect
+	client.actions[kActionStatus] = client.Status
+	client.actions[kActionConnect] = client.Connect
+	client.actions[kActionDisconnect] = client.Disconnect
 
-	client.actions["register"] = client.Register
-	client.actions["login"] = client.Login
-	client.actions["logout"] = client.Logout
+	client.actions[kActionRegister] = client.Register
+	client.actions[kActionLogin] = client.Login
+	client.actions[kActionLogout] = client.Logout
 
-	client.actions["services"] = client.Services
-	client.actions["myservices"] = client.MyServices
-	client.actions["show-service"] = client.ShowService
+	client.actions[kActionServices] = client.GoCheckService0
+	client.actions[kActionMyServices] = client.GoCheckService0
+	client.actions[kActionShowService] = client.GoCheckService1
 
-	client.actions["join-service"] = client.JoinService
-	client.actions["leave-service"] = client.LeaveService
-	client.actions["create-service"] = client.CreateService
-	client.actions["remove-service"] = client.RemoveService
-	client.actions["start-service"] = client.StartService
-	client.actions["stop-service"] = client.StopService
+	client.actions[kActionJoinService] = client.GoCheckService2
+	client.actions[kActionLeaveService] = client.GoCheckService1
+	client.actions[kActionCreateService] = client.GoCheckService3
+	client.actions[kActionRemoveService] = client.GoCheckService1
+	client.actions[kActionEnableService] = client.GoCheckService1
+	client.actions[kActionDisableService] = client.GoCheckService1
+	client.actions[kActionConnectService] = client.GoCheckService1
+	client.actions[kActionDisconnectService] = client.GoCheckService1
 
 	return client
 }
 
 type SignalClient struct {
 	util.Logging
+	*EvObject
 
 	id      string
-	cb      SignalEventCallback
 	ch_send chan *SignalMessage
-	pending map[string]*SignalMessage
 	ch_exit chan error
+
+	pending map[string]*SignalMessage
+	actions map[string]fnSignalClientAction
 
 	network NetworkStatus
 	online  bool
 	sigaddr string
-	actions map[string]fnSignalClientAction
 }
 
 func (sc *SignalClient) Start() {
@@ -125,6 +128,7 @@ func (sc *SignalClient) Run(addr string) error {
 					} else {
 						// this is server event
 						sc.Println("read, event data", resp)
+						sc.FireEvent(resp.Event, evData{"data": resp})
 					}
 				}
 			}
@@ -142,7 +146,9 @@ func (sc *SignalClient) Run(addr string) error {
 					sc.Printf("write, send fail: %v\n", err)
 					return err
 				}
-				sc.pending[msg.req.Sequence] = msg
+				if msg.ch_resp != nil {
+					sc.pending[msg.req.Sequence] = msg
+				}
 			}
 		case err := <-sc.ch_exit:
 			return err
@@ -316,40 +322,20 @@ func (sc *SignalClient) Logout(action string, params []string) error {
 
 /// service operations
 
-func (sc *SignalClient) Services(action string, params []string) error {
+func (sc *SignalClient) GoCheckService0(action string, params []string) error {
 	return sc.ControlService(action, params, 0)
 }
 
-func (sc *SignalClient) MyServices(action string, params []string) error {
-	return sc.ControlService(action, params, 0)
-}
-
-func (sc *SignalClient) ShowService(action string, params []string) error {
+func (sc *SignalClient) GoCheckService1(action string, params []string) error {
 	return sc.ControlService(action, params, 1)
 }
 
-func (sc *SignalClient) JoinService(action string, params []string) error {
+func (sc *SignalClient) GoCheckService2(action string, params []string) error {
 	return sc.ControlService(action, params, 2)
 }
 
-func (sc *SignalClient) LeaveService(action string, params []string) error {
-	return sc.ControlService(action, params, 1)
-}
-
-func (sc *SignalClient) CreateService(action string, params []string) error {
+func (sc *SignalClient) GoCheckService3(action string, params []string) error {
 	return sc.ControlService(action, params, 3)
-}
-
-func (sc *SignalClient) RemoveService(action string, params []string) error {
-	return sc.ControlService(action, params, 1)
-}
-
-func (sc *SignalClient) StartService(action string, params []string) error {
-	return sc.ControlService(action, params, 1)
-}
-
-func (sc *SignalClient) StopService(action string, params []string) error {
-	return sc.ControlService(action, params, 1)
 }
 
 func (sc *SignalClient) ControlService(action string, params []string, count int) error {
@@ -386,15 +372,16 @@ func (sc *SignalClient) ControlService(action string, params []string, count int
 
 /// ice message
 
-func (sc *SignalClient) SendIceCandidate(candidate string, serviceName string) error {
-	action := "ice-candidate"
+func (sc *SignalClient) SendIceAuth(ufrag, pwd string, serviceName string) error {
+	action := kActionEventIceAuth
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(action, err)
 		return err
 	}
 
 	req := newSignalRequest(sc.id)
-	req.IceCandidate = candidate
+	req.IceUfrag = ufrag
+	req.IcePwd = pwd
 	req.ServiceName = serviceName
 	if resp, err := sc.SendRequest(action, req); err == nil {
 		fmt.Println(resp)
@@ -404,16 +391,15 @@ func (sc *SignalClient) SendIceCandidate(candidate string, serviceName string) e
 	}
 }
 
-func (sc *SignalClient) SendIceAuth(ufrag, pwd string, serviceName string) error {
-	action := "ice-auth"
+func (sc *SignalClient) SendIceCandidate(candidate string, serviceName string) error {
+	action := kActionEventIceCandidate
 	if err := sc.CheckOnline(true); err != nil {
 		fmt.Println(action, err)
 		return err
 	}
 
 	req := newSignalRequest(sc.id)
-	req.IceUfrag = ufrag
-	req.IcePwd = pwd
+	req.IceCandidate = candidate
 	req.ServiceName = serviceName
 	if resp, err := sc.SendRequest(action, req); err == nil {
 		fmt.Println(resp)

@@ -17,16 +17,12 @@ func NewServer(sigaddr string) *Server {
 
 type Server struct {
 	util.Logging
-	signal *SignalEndpoint
-}
-
-func (s *Server) OnEvent(event SignalEvent) {
-	s.Println("onEvent", event)
+	ep *Endpoint
 }
 
 func (s *Server) Init(sigaddr string) {
-	s.signal = NewSignalEndpoint(s)
-	s.signal.Init(sigaddr, s)
+	s.ep = NewEndpoint(s, true)
+	s.ep.Init(sigaddr)
 }
 
 func (s *Server) PreRunSignal(params []string) error {
@@ -34,11 +30,18 @@ func (s *Server) PreRunSignal(params []string) error {
 }
 
 func (s *Server) PostRunSignal(params []string, err error) {
-	if err != nil {
+	if err != nil || len(params) == 0 {
 		s.Println("Run err:", err, params)
+	} else {
+		switch params[0] {
+		case "enable-service":
+			s.ep.ControlLocalService("enable", params[1], "")
+		case "disable-service":
+			s.ep.ControlLocalService("disable", params[1], "")
+		}
 	}
 }
 
 func (s *Server) StartShell() {
-	s.signal.StartShell("server")
+	s.ep.StartShell("server")
 }

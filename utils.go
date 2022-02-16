@@ -36,3 +36,8 @@ func ShellExecCmd(bin string, opts ...string) {
 		fmt.Printf("Got error: %s\n", err.Error())
 	}
 }
+
+func AnyToString(data interface{}) string {
+	str, _ := data.(string)
+	return str
+}

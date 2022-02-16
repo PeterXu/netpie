@@ -22,4 +22,5 @@ var (
 	errFnServiceNotJoin     = func(name string) error { return errors.New("service not join: " + name) }
 	errFnServiceNotExist    = func(name string) error { return errors.New("service not exist: " + name) }
 	errFnServiceNotOwner    = func(id string) error { return errors.New("service not owner: " + id) }
+	errFnServiceIsOwner     = func(id string) error { return errors.New("service is owner: " + id) }
 )

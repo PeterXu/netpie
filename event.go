@@ -10,23 +10,47 @@ type evData = ev.M
 
 /// ev objects
 
+type EvListenerFunc func(e evEvent) error
+
 type EvObject struct {
-	*ev.Manager
+	*evManager
+	listeners map[string]EvListenerFunc
 }
 
-func newEvObject() *EvObject {
-	return &EvObject{ev.NewManager("event")}
+func NewEvObject() *EvObject {
+	return &EvObject{
+		evManager: ev.NewManager("event"),
+		listeners: make(map[string]EvListenerFunc),
+	}
 }
 
-func (obj *EvObject) listenEvent(name string, listener ev.Listener) {
-	obj.Listen(name, listener, ev.Normal)
+func (obj *EvObject) Handle(e evEvent) error {
+	if fn, ok := obj.listeners[e.Name()]; ok {
+		return fn(e)
+	} else {
+		return nil
+	}
 }
 
-func (obj *EvObject) fireEvent(name string, params ev.M) {
+func (obj *EvObject) ListenEvents(names []string, listener EvListenerFunc) {
+	for _, name := range names {
+		obj.ListenEvent(name, listener)
+	}
+}
+
+// only listen once with the same key
+func (obj *EvObject) ListenEvent(name string, listener EvListenerFunc) {
+	if _, ok := obj.listeners[name]; !ok {
+		obj.Listen(name, obj, ev.Normal)
+	}
+	obj.listeners[name] = listener
+}
+
+func (obj *EvObject) FireEvent(name string, params ev.M) {
 	obj.Fire(name, params)
 }
 
-func (obj *EvObject) asyncFireEvent(name string, params ev.M) {
+func (obj *EvObject) AsyncFireEvent(name string, params ev.M) {
 	go func() {
 		obj.Fire(name, params)
 	}()

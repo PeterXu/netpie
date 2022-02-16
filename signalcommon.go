@@ -1,6 +1,36 @@
 package main
 
-import util "github.com/PeterXu/goutil"
+import (
+	util "github.com/PeterXu/goutil"
+)
+
+const (
+	kActionStatus     = "status"
+	kActionConnect    = "connect"
+	kActionDisconnect = "disconnect"
+
+	kActionRegister          = "register"
+	kActionLogin             = "login"
+	kActionLogout            = "logout"
+	kActionServices          = "services"
+	kActionMyServices        = "myservices"
+	kActionShowService       = "show-service"
+	kActionJoinService       = "join-service"
+	kActionLeaveService      = "leave-service"
+	kActionCreateService     = "create-service"
+	kActionRemoveService     = "remove-service"
+	kActionEnableService     = "enable-service"
+	kActionDisableService    = "disable-service"
+	kActionConnectService    = "connect-service"
+	kActionDisconnectService = "disconnect-service"
+
+	kActionEventIceOpen      = "ice-open"
+	kActionEventIceOpenAck   = "ice-open-ack"
+	kActionEventIceClose     = "ice-close"
+	kActionEventIceCloseAck  = "ice-close-ack"
+	kActionEventIceAuth      = "ice-auth"
+	kActionEventIceCandidate = "ice-candidate"
+)
 
 /**
  * Network status
@@ -13,20 +43,6 @@ const (
 	kNetworkConnected
 	kNetworkDisconnected
 )
-
-/**
- * Signal event
- */
-func newSignalEvent() *SignalEvent {
-	return &SignalEvent{}
-}
-
-type SignalEvent struct {
-}
-
-type SignalEventCallback interface {
-	OnEvent(event SignalEvent)
-}
 
 /**
  * SignalRequest/SignalResponse
@@ -58,17 +74,23 @@ type SignalRequest struct {
 	conn *SignalConnection
 }
 
-func newSignalResponse(sequence string) *SignalResponse {
+func NewSignalResponse(sequence string) *SignalResponse {
 	return &SignalResponse{
 		Sequence: sequence,
+		ResultM:  make(map[string]string),
 	}
 }
 
 type SignalResponse struct {
-	Event    string // default not event
-	Sequence string
-	Result   []string
-	Error    error
+	Event       string // default not event
+	Sequence    string
+	FromId      string
+	ServiceName string
+
+	Result  string
+	ResultL []string
+	ResultM map[string]string
+	Error   error
 
 	conn *SignalConnection
 }
@@ -121,7 +143,7 @@ func NewSignalService(name, id string) *SignalService {
 type SignalService struct {
 	Name        string
 	Owner       string
-	Started     bool
+	Enabled     bool
 	Description string
 	PwdMd5      string `json:"-"`
 	Salt        string `json:"-"`

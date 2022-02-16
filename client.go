@@ -14,16 +14,12 @@ func NewClient(sigaddr string) *Client {
 
 type Client struct {
 	util.Logging
-	signal *SignalEndpoint
-}
-
-func (c *Client) OnEvent(event SignalEvent) {
-	c.Println("onEvent", event)
+	ep *Endpoint
 }
 
 func (c *Client) Init(sigaddr string) {
-	c.signal = NewSignalEndpoint(c)
-	c.signal.Init(sigaddr, c)
+	c.ep = NewEndpoint(c, false)
+	c.ep.Init(sigaddr)
 }
 
 func (c *Client) PreRunSignal(params []string) error {
@@ -33,9 +29,10 @@ func (c *Client) PreRunSignal(params []string) error {
 func (c *Client) PostRunSignal(params []string, err error) {
 	if err != nil {
 		c.Println("Run err:", err, params)
+	} else {
 	}
 }
 
 func (c *Client) StartShell() {
-	c.signal.StartShell("client")
+	c.ep.StartShell("client")
 }
