@@ -69,14 +69,12 @@ func (c *SignalConnection) readPump() {
 			break
 		}
 
-		req := newSignalRequest("")
+		req := NewSignalRequest("")
 		if err := util.GobDecode(data, req); err != nil {
 			c.ss.Printf("conn, decode error: %v\n", err)
 		} else {
 			req.conn = c
-			msg := newSignalMessage()
-			msg.req = req
-			c.ss.ch_receive <- msg
+			c.ss.ch_receive <- req
 		}
 	}
 }

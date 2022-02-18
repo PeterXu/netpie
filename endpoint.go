@@ -49,6 +49,8 @@ func (e *Endpoint) Init(sigaddr string) {
 	events := []string{
 		kActionEventIceOpen,
 		kActionEventIceClose,
+		kActionEventIceOpenAck,
+		kActionEventIceCloseAck,
 		kActionEventIceAuth,
 		kActionEventIceCandidate,
 	}
@@ -63,11 +65,23 @@ func (e *Endpoint) Init(sigaddr string) {
 func (e *Endpoint) OnRemoteEvent(resp *SignalResponse) error {
 	switch resp.Event {
 	case kActionEventIceOpen:
-		e.CheckOpenLocalService("open", resp.ServiceName, resp.FromId)
-		//e.signal.ch_send <- resp
+		e.CheckOpenLocalService("ev_open", resp.ServiceName, resp.FromId)
+
+		req := NewSignalRequest(e.signal.id)
+		req.ToId = resp.FromId
+		req.ServiceName = resp.ServiceName
+		e.signal.SendRequest(kActionEventIceOpenAck, req)
 	case kActionEventIceClose:
-		e.CheckOpenLocalService("close", resp.ServiceName, resp.FromId)
-		resp.Event = kActionEventIceCloseAck
+		e.CheckOpenLocalService("ev_close", resp.ServiceName, resp.FromId)
+
+		req := NewSignalRequest(e.signal.id)
+		req.ToId = resp.FromId
+		req.ServiceName = resp.ServiceName
+		e.signal.SendRequest(kActionEventIceCloseAck, req)
+	case kActionEventIceOpenAck:
+		e.CheckOpenLocalService("ev_openack", resp.ServiceName, resp.FromId)
+	case kActionEventIceCloseAck:
+		e.CheckOpenLocalService("ev_closeack", resp.ServiceName, resp.FromId)
 	case kActionEventIceAuth:
 		if srv := e.GetLocalService(resp.ServiceName, resp.FromId); srv != nil {
 			srv.OnIceAuth(resp.ResultM["ice-ufrag"], resp.ResultM["ice-pwd"])
@@ -113,16 +127,19 @@ func (e *Endpoint) CheckEnableLocalService(action, name string) (err error) {
 
 func (e *Endpoint) CheckOpenLocalService(action, name, fromId string) (err error) {
 	switch action {
-	case "open":
+	case "ev_open", "ev_openack":
 		if db, ok := e.services[name]; ok {
 			srvId := e.GetLocalServiceKey(fromId)
 			if item, ok := db.items[srvId]; !ok {
-				isLocalServer := !e.isServer
-				item = NewLocalService(name, isLocalServer)
+				// service provider should start client-mode
+				// service requester should start server-mode
+				isServiceProvider := (action == "ev_open")
+				item = NewLocalService(name, !isServiceProvider)
+				//TODO
 				db.items[srvId] = item
 			}
 		}
-	case "close":
+	case "ev_close", "ev_closeack":
 		if db, ok := e.services[name]; ok {
 			srvId := e.GetLocalServiceKey(fromId)
 			if item, ok := db.items[srvId]; !ok {
@@ -194,10 +211,14 @@ func (e *Endpoint) Executor(line string) {
 	}
 
 	// do Run
-	if err = e.GoRun(parts[0], parts[1:]); err != nil {
-		fmt.Println("== failed: ", err)
+	var ret *Result
+	if ret, err = e.GoRun(parts[0], parts[1:]); err != nil {
+		fmt.Printf("== %s failed: %v\n", parts[0], err)
 	} else {
-		fmt.Println("== success")
+		fmt.Printf("== %s success\n", parts[0])
+	}
+	if ret != nil {
+		fmt.Println("== result: \n", ret.data)
 	}
 	//fmt.Println(":", line, len(parts), parts, err)
 
@@ -207,10 +228,10 @@ func (e *Endpoint) Executor(line string) {
 	}
 }
 
-func (e *Endpoint) GoRun(action string, params []string) error {
+func (e *Endpoint) GoRun(action string, params []string) (*Result, error) {
 	if fn, ok := e.signal.actions[action]; ok {
 		return fn(action, params)
 	} else {
-		return errFnInvalidAction(action)
+		return nil, errFnInvalidAction(action)
 	}
 }

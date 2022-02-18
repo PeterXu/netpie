@@ -9,6 +9,11 @@ import (
 	util "github.com/PeterXu/goutil"
 )
 
+const (
+	kDefaultDBFile = "/tmp/signal_data.db"
+	kMaxDBSize     = 256 * 1024
+)
+
 /**
  * Signal database for storage
  */
@@ -31,7 +36,7 @@ func NewSignalServer() *SignalServer {
 
 		ch_connect: make(chan *SignalConnection),
 		ch_close:   make(chan *SignalConnection),
-		ch_receive: make(chan *SignalMessage),
+		ch_receive: make(chan *SignalRequest),
 
 		connections: make(map[*SignalConnection]bool),
 		onlines:     make(map[string]*SignalConnection),
@@ -47,8 +52,8 @@ func NewSignalServer() *SignalServer {
 	server.actions[kActionMyServices] = server.MyServices
 	server.actions[kActionShowService] = server.ShowService
 
-	server.actions[kActionJoinService] = server.JoinService
-	server.actions[kActionLeaveService] = server.LeaveService
+	server.actions[kActionJoinService] = server.CheckJoinService
+	server.actions[kActionLeaveService] = server.CheckJoinService
 	server.actions[kActionCreateService] = server.CreateService
 	server.actions[kActionRemoveService] = server.RemoveService
 	server.actions[kActionEnableService] = server.CheckEnableService
@@ -59,8 +64,13 @@ func NewSignalServer() *SignalServer {
 	// ice-relative
 	server.actions[kActionEventIceOpen] = server.CheckOnIceStatus
 	server.actions[kActionEventIceClose] = server.CheckOnIceStatus
+	server.actions[kActionEventIceOpenAck] = server.CheckOnIceStatus
+	server.actions[kActionEventIceCloseAck] = server.CheckOnIceStatus
 	server.actions[kActionEventIceAuth] = server.OnIceAuth
 	server.actions[kActionEventIceCandidate] = server.OnIceCandidate
+
+	// init
+	server.SyncFromStorage()
 
 	return server
 }
@@ -72,7 +82,7 @@ type SignalServer struct {
 
 	ch_connect chan *SignalConnection
 	ch_close   chan *SignalConnection
-	ch_receive chan *SignalMessage
+	ch_receive chan *SignalRequest
 
 	connections map[*SignalConnection]bool
 	onlines     map[string]*SignalConnection // uid => ..
@@ -93,7 +103,8 @@ func (ss *SignalServer) Start(addr string) {
 
 func (ss *SignalServer) Run() {
 	ss.Println("running begin")
-	tickChan := time.NewTicker(time.Second * 30)
+	tickChan := time.NewTicker(time.Second * 5)
+
 	for {
 		select {
 		case conn := <-ss.ch_connect:
@@ -107,26 +118,36 @@ func (ss *SignalServer) Run() {
 				delete(ss.onlines, conn.id)
 			}
 			close(conn.ch_send)
-		case msg := <-ss.ch_receive:
-			ss.OnMessage(msg.req)
+		case req := <-ss.ch_receive:
+			ss.OnReceiveRequest(req)
 		case <-tickChan.C:
-			// clear timeout
+			ss.SyncToStorage()
 		}
 	}
 }
 
 func (ss *SignalServer) SyncToStorage() {
 	if buf, err := util.GobEncode(ss.db); err != nil {
-		ss.Printf("syncTo err: %v\n", err)
+		ss.Warnln("SyncTo gob err: ", err)
 	} else {
-		_ = buf
+		//_ = buf
+		if err := WriteFile(kDefaultDBFile, buf.Bytes()); err != nil {
+			ss.Warnln("SyncTo write err: ", err)
+		} else {
+			//ss.Println("SyncTo success")
+		}
 	}
 }
 
 func (ss *SignalServer) SyncFromStorage() {
-	var cached []byte
-	if err := util.GobDecode(cached, ss.db); err != nil {
-		ss.Printf("syncFrom err:%v\n", err)
+	if data, err := ReadFile(kDefaultDBFile, kMaxDBSize); err != nil {
+		ss.Warnln("SyncFrom, read err: ", err)
+	} else {
+		if err := util.GobDecode(data, ss.db); err != nil {
+			ss.Warnln("SyncFrom gob err: ", err)
+		} else {
+			ss.Println("SyncFrom success:", ss.db)
+		}
 	}
 }
 
@@ -154,7 +175,7 @@ func (ss *SignalServer) CheckOnlineConn(id string) (*SignalConnection, error) {
 	}
 }
 
-func (ss *SignalServer) OnMessage(req *SignalRequest) {
+func (ss *SignalServer) OnReceiveRequest(req *SignalRequest) {
 	ss.Printf("receive request: %s, seq: %s, conn: %v\n", req.Action, req.Sequence, req.conn)
 
 	var err error
@@ -166,16 +187,22 @@ func (ss *SignalServer) OnMessage(req *SignalRequest) {
 	}
 
 	ss.Printf("complete request: %s, seq: %s, err: %v\n", req.Action, req.Sequence, err)
+
 	if err != nil {
 		resp.Error = fmt.Sprint(err)
+	} else {
+		if resp.conn != nil {
+			// forward to another
+			resp.conn.ch_send <- resp
+			resp = nil
+		}
 	}
 
-	if resp.conn != nil {
-		req.conn.ch_send <- NewSignalResponse(req.Sequence)
-		resp.conn.ch_send <- resp
-	} else {
-		req.conn.ch_send <- resp
+	// reply to request
+	if resp == nil {
+		resp = NewSignalResponse(req.Sequence)
 	}
+	req.conn.ch_send <- resp
 }
 
 func (ss *SignalServer) Register(req *SignalRequest, resp *SignalResponse) error {
@@ -195,7 +222,6 @@ func (ss *SignalServer) Register(req *SignalRequest, resp *SignalResponse) error
 		new_pwd_md5 := util.MD5SumGenerate([]string{req.PwdMd5, req.Salt})
 		peer := NewSignalPeer(req.FromId, new_pwd_md5, req.Salt)
 		ss.db.Peers[req.FromId] = peer
-		ss.SyncToStorage()
 		return nil
 	}
 }
@@ -239,9 +265,9 @@ func (ss *SignalServer) Services(req *SignalRequest, resp *SignalResponse) error
 	} else {
 		for name, srv := range ss.db.Services {
 			if srv.Owner == req.FromId {
-				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - owned", name))
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - my owned", name))
 			} else {
-				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - owned %s", name, srv.Owner))
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - %s owned", name, srv.Owner))
 			}
 		}
 		return nil
@@ -255,14 +281,14 @@ func (ss *SignalServer) MyServices(req *SignalRequest, resp *SignalResponse) err
 	} else {
 		for name, srv := range ss.db.Services {
 			if srv.Owner == req.FromId {
-				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - owned", name))
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - my owned", name))
 			}
 		}
 		for name, ok := range peer.InServices {
 			if ok {
-				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - joined", name))
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - my joined", name))
 			} else {
-				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - left", name))
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - my left", name))
 			}
 		}
 		return nil
@@ -274,10 +300,14 @@ func (ss *SignalServer) ShowService(req *SignalRequest, resp *SignalResponse) er
 		return err
 	}
 
-	if item, ok := ss.db.Services[req.ServiceName]; !ok {
+	if service, ok := ss.db.Services[req.ServiceName]; !ok {
 		return errServiceNotExist
 	} else {
-		resp.ResultL = append(resp.ResultL, util.JsonEncode(item))
+		if service.Enabled {
+			_, err := ss.CheckOnline(service.Owner)
+			service.Active = (err == nil)
+		}
+		resp.ResultL = append(resp.ResultL, util.JsonEncode(service))
 		return nil
 	}
 }
@@ -294,7 +324,7 @@ func (ss *SignalServer) CheckVerifyService(name string, pwdMd5 string) (*SignalS
 	}
 }
 
-func (ss *SignalServer) JoinService(req *SignalRequest, resp *SignalResponse) error {
+func (ss *SignalServer) CheckJoinService(req *SignalRequest, resp *SignalResponse) error {
 	if peer, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	} else {
@@ -302,29 +332,19 @@ func (ss *SignalServer) JoinService(req *SignalRequest, resp *SignalResponse) er
 			return err
 		} else {
 			if service.Owner == req.FromId {
-				return errFnServiceInvalid("owner need not join")
-			} else {
+				return errFnServiceInvalid("owner should not join/leave")
+			}
+			switch req.Action {
+			case kActionJoinService:
 				peer.InServices[req.ServiceName] = true
+			case kActionLeaveService:
+				if _, ok := peer.InServices[req.ServiceName]; ok {
+					peer.InServices[req.ServiceName] = false
+				}
 			}
 		}
 	}
 
-	return nil
-}
-
-func (ss *SignalServer) LeaveService(req *SignalRequest, resp *SignalResponse) error {
-	if peer, err := ss.CheckOnline(req.FromId); err != nil {
-		return err
-	} else {
-		if _, err := ss.CheckVerifyService(req.ServiceName, req.ServicePwdMd5); err != nil {
-			return err
-		} else {
-			if _, ok := peer.InServices[req.ServiceName]; ok {
-				peer.InServices[req.ServiceName] = false
-			}
-			// TODO
-		}
-	}
 	return nil
 }
 
@@ -384,6 +404,7 @@ func (ss *SignalServer) CheckEnableService(req *SignalRequest, resp *SignalRespo
 		return err
 	} else {
 		if service.Owner != req.FromId {
+			// only owner could enable/disable service
 			return errServiceRequireOwner
 		}
 		switch req.Action {
@@ -408,6 +429,7 @@ func (ss *SignalServer) CheckConnectService(req *SignalRequest, resp *SignalResp
 			return err
 		} else {
 			if service.Owner == req.FromId {
+				// owner donot need to connect/disconnect service
 				return errServiceShouldNotOwner
 			}
 		}

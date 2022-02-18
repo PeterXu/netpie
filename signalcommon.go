@@ -49,9 +49,10 @@ const (
 /**
  * SignalRequest/SignalResponse
  */
-func newSignalRequest(id string) *SignalRequest {
+func NewSignalRequest(id string) *SignalRequest {
 	return &SignalRequest{
 		FromId: id,
+		ctime:  util.NowMs(),
 	}
 }
 
@@ -73,7 +74,9 @@ type SignalRequest struct {
 	IceUfrag     string
 	IcePwd       string
 
-	conn *SignalConnection
+	conn    *SignalConnection
+	ch_resp chan *SignalResponse
+	ctime   int64
 }
 
 func NewSignalResponse(sequence string) *SignalResponse {
@@ -89,26 +92,12 @@ type SignalResponse struct {
 	FromId      string
 	ServiceName string
 
+	Token   string
 	ResultL []string
 	ResultM map[string]string
 	Error   string
 
 	conn *SignalConnection
-}
-
-/**
- * SignalMessage
- */
-func newSignalMessage() *SignalMessage {
-	return &SignalMessage{
-		ctime: util.NowMs(),
-	}
-}
-
-type SignalMessage struct {
-	req     *SignalRequest
-	ch_resp chan *SignalResponse
-	ctime   int64
 }
 
 /**
@@ -146,6 +135,7 @@ type SignalService struct {
 	Owner       string
 	Enabled     bool
 	Description string
+	Active      bool
 	PwdMd5      string `json:"-"`
 	Salt        string `json:"-"`
 	Ctime       int64  `json:"-"`

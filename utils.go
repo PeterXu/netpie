@@ -3,9 +3,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strings"
 
+	util "github.com/PeterXu/goutil"
 	"golang.org/x/term"
 )
 
@@ -111,4 +114,70 @@ func ParseCommandLine(line string) (parts []string, err error) {
 		}
 	}
 	return
+}
+
+func ReadFile(fname string, maxSize int) ([]byte, error) {
+	//content, err := ioutil.ReadFile("text.txt")
+	file, err := os.Open(fname)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	if maxSize < 8*1024 {
+		maxSize = 8 * 1024
+	}
+	buf := make([]byte, maxSize)
+
+	total, err := file.Read(buf)
+	if err != nil {
+		if err != io.EOF {
+			return nil, err
+		}
+	}
+
+	return buf[:total], nil
+}
+
+func WriteFile(fname string, data []byte) error {
+	file, err := os.Create(fname)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	total, err := file.Write(data)
+	_ = total
+
+	return err
+}
+
+func GenerateToken(id, pwdMd5 string) string {
+	times := fmt.Sprintf("%d", util.NowMs())
+	value := util.MD5SumGenerate([]string{id, pwdMd5, times})
+	return fmt.Sprintf("%s_%s", value, times)
+}
+
+func VerifyToken(id, pwdMd5, token string) bool {
+	parts := strings.Split(token, "_")
+	if len(parts) == 2 {
+		return util.MD5SumVerify([]string{id, pwdMd5, parts[1]}, parts[0])
+	}
+	return false
+}
+
+func CheckTokenTimeout(token string, timeout int) bool {
+	parts := strings.Split(token, "_")
+	if len(parts) == 2 {
+		itime := util.Atoi64(parts[1])
+		return itime+int64(timeout) >= util.NowMs()
+	}
+	return true
+}
+
+func VerifyTokenAndTime(id, pwdMd5, token string, timeout int) bool {
+	if VerifyToken(id, pwdMd5, token) {
+		return !CheckTokenTimeout(token, timeout)
+	}
+	return false
 }
