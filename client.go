@@ -27,10 +27,6 @@ func (c *Client) PreRunSignal(params []string) error {
 }
 
 func (c *Client) PostRunSignal(params []string, err error) {
-	if err != nil {
-		c.Println("Run err:", err, params)
-	} else {
-	}
 }
 
 func (c *Client) StartShell() {

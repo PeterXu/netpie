@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -39,6 +38,7 @@ type Endpoint struct {
 	isServer bool
 	services map[string]*LocalServiceDB // key: serviceName
 	signal   *SignalClient
+	cc       *ShellCompleter
 }
 
 func (e *Endpoint) Init(sigaddr string) {
@@ -63,10 +63,10 @@ func (e *Endpoint) Init(sigaddr string) {
 func (e *Endpoint) OnRemoteEvent(resp *SignalResponse) error {
 	switch resp.Event {
 	case kActionEventIceOpen:
-		e.ControlLocalService("open", resp.ServiceName, resp.FromId)
+		e.CheckOpenLocalService("open", resp.ServiceName, resp.FromId)
 		//e.signal.ch_send <- resp
 	case kActionEventIceClose:
-		e.ControlLocalService("close", resp.ServiceName, resp.FromId)
+		e.CheckOpenLocalService("close", resp.ServiceName, resp.FromId)
 		resp.Event = kActionEventIceCloseAck
 	case kActionEventIceAuth:
 		if srv := e.GetLocalService(resp.ServiceName, resp.FromId); srv != nil {
@@ -94,7 +94,7 @@ func (e *Endpoint) GetLocalService(name, fromId string) *LocalService {
 	return nil
 }
 
-func (e *Endpoint) ControlLocalService(action, name, fromId string) (err error) {
+func (e *Endpoint) CheckEnableLocalService(action, name string) (err error) {
 	switch action {
 	case "enable":
 		if _, ok := e.services[name]; !ok {
@@ -107,6 +107,12 @@ func (e *Endpoint) ControlLocalService(action, name, fromId string) (err error) 
 			}
 			delete(e.services, name)
 		}
+	}
+	return
+}
+
+func (e *Endpoint) CheckOpenLocalService(action, name, fromId string) (err error) {
+	switch action {
 	case "open":
 		if db, ok := e.services[name]; ok {
 			srvId := e.GetLocalServiceKey(fromId)
@@ -143,6 +149,7 @@ func (e *Endpoint) StartShell(title string) {
 		prompt.OptionInputTextColor(prompt.Blue),
 		prompt.OptionCompletionWordSeparator(completer.FilePathCompletionSeparator),
 	)
+	e.cc = cc
 	p.Run()
 }
 
@@ -156,21 +163,43 @@ func (e *Endpoint) Executor(line string) {
 		return
 	}
 
+	var err error
 	var parts []string
-	for _, item := range strings.Split(line, " ") {
-		parts = append(parts, strings.Trim(item, "\""))
+
+	if parts, err = ParseCommandLine(line); err != nil {
+		fmt.Println("error: ", err)
+		return
+	}
+
+	if len(parts[0]) == 0 {
+		return
+	}
+
+	if !e.cc.IsExist(parts[0]) {
+		fmt.Printf("warn: %s not exist\n", parts[0])
+		return
+	} else {
+		switch parts[0] {
+		case "help":
+			e.cc.PrintHelp()
+			return
+		}
 	}
 
 	// do PreRun if exist
 	if e.hook != nil {
-		if err := e.hook.PreRunSignal(parts); err != nil {
+		if err = e.hook.PreRunSignal(parts); err != nil {
 			return
 		}
 	}
 
 	// do Run
-	err := e.GoRun(parts[0], parts[1:])
-	fmt.Println(":", line, parts, err)
+	if err = e.GoRun(parts[0], parts[1:]); err != nil {
+		fmt.Println("== failed: ", err)
+	} else {
+		fmt.Println("== success")
+	}
+	//fmt.Println(":", line, len(parts), parts, err)
 
 	// do PostRun if exist
 	if e.hook != nil {
@@ -182,6 +211,6 @@ func (e *Endpoint) GoRun(action string, params []string) error {
 	if fn, ok := e.signal.actions[action]; ok {
 		return fn(action, params)
 	} else {
-		return errors.New("invalid action:" + action)
+		return errFnInvalidAction(action)
 	}
 }

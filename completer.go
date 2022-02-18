@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/c-bata/go-prompt"
 )
 
@@ -26,6 +28,8 @@ func (cc *ShellCompleter) Init(isServer bool) {
 
 func (cc *ShellCompleter) InitClient() {
 	cc.suggest = []prompt.Suggest{
+		{Text: "help", Description: "usage: help"},
+
 		{Text: "status", Description: "usage: status (show status to sigserver)"},
 		{Text: "connect", Description: "usage: connect sigaddr (to sigserver)"},
 		{Text: "disconnect", Description: "usage: disconnect (to sigserver)"},
@@ -37,15 +41,18 @@ func (cc *ShellCompleter) InitClient() {
 		{Text: "services", Description: "usage: services (list all services)"},
 		{Text: "myservices", Description: "usage: myservices (list joined services)"},
 		{Text: "show-service", Description: "usage: show-service serviceName (show service info)"},
+
 		{Text: "join-service", Description: "usage: join-service serviceName pwd"},
-		{Text: "leave-service", Description: "usage: leave-service serviceName"},
-		{Text: "connect-service", Description: "usage: connect-service serviceName"},
-		{Text: "disconnect-service", Description: "usage: disconnect-service serviceName"},
+		{Text: "leave-service", Description: "usage: leave-service serviceName pwd"},
+		{Text: "connect-service", Description: "usage: connect-service serviceName pwd"},
+		{Text: "disconnect-service", Description: "usage: disconnect-service serviceName pwd"},
 	}
 }
 
 func (cc *ShellCompleter) InitServer() {
 	cc.suggest = []prompt.Suggest{
+		{Text: "help", Description: "usage: help"},
+
 		{Text: "status", Description: "usage: status (show status to sigserver)"},
 		{Text: "connect", Description: "usage: connect sigaddr (to sigserver)"},
 		{Text: "disconnect", Description: "usage: disconnect (to sigserver)"},
@@ -54,12 +61,14 @@ func (cc *ShellCompleter) InitServer() {
 		{Text: "login", Description: "usage: login id pwd"},
 		{Text: "logout", Description: "usage: logout"},
 
+		{Text: "services", Description: "usage: services (list all services)"},
 		{Text: "myservices", Description: "usage: myservices (list my services)"},
 		{Text: "show-service", Description: "usage: show-service serviceName (show service info)"},
+
 		{Text: "create-service", Description: "usage: create-service serviceName pwd description}"},
-		{Text: "remove-service", Description: "usage: remove-service serviceName (only owner)"},
-		{Text: "enable-service", Description: "usage: enable-service serviceName (only owner)"},
-		{Text: "disable-service", Description: "usage: disable-service serviceName (only owner)"},
+		{Text: "remove-service", Description: "usage: remove-service serviceName pwd (only owner)"},
+		{Text: "enable-service", Description: "usage: enable-service serviceName pwd (only owner)"},
+		{Text: "disable-service", Description: "usage: disable-service serviceName pwd (only owner)"},
 	}
 }
 
@@ -70,4 +79,21 @@ func (cc *ShellCompleter) Complete(d prompt.Document) []prompt.Suggest {
 	} else {
 		return []prompt.Suggest{}
 	}
+}
+
+func (cc ShellCompleter) IsExist(cmd string) bool {
+	for _, item := range cc.suggest {
+		if item.Text == cmd {
+			return true
+		}
+	}
+	return false
+}
+
+func (cc ShellCompleter) PrintHelp() {
+	fmt.Println("All avaiable commands: ")
+	for _, item := range cc.suggest {
+		fmt.Printf("  %s - %s\n", item.Text, item.Description)
+	}
+	fmt.Println("")
 }

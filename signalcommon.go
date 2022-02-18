@@ -5,6 +5,8 @@ import (
 )
 
 const (
+	kActionTesting = "testing"
+
 	kActionStatus     = "status"
 	kActionConnect    = "connect"
 	kActionDisconnect = "disconnect"
@@ -87,10 +89,9 @@ type SignalResponse struct {
 	FromId      string
 	ServiceName string
 
-	Result  string
 	ResultL []string
 	ResultM map[string]string
-	Error   error
+	Error   string
 
 	conn *SignalConnection
 }

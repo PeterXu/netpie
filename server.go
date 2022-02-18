@@ -30,14 +30,12 @@ func (s *Server) PreRunSignal(params []string) error {
 }
 
 func (s *Server) PostRunSignal(params []string, err error) {
-	if err != nil || len(params) == 0 {
-		s.Println("Run err:", err, params)
-	} else {
+	if err == nil && len(params) > 0 {
 		switch params[0] {
 		case "enable-service":
-			s.ep.ControlLocalService("enable", params[1], "")
+			s.ep.CheckEnableLocalService("enable", params[1])
 		case "disable-service":
-			s.ep.ControlLocalService("disable", params[1], "")
+			s.ep.CheckEnableLocalService("disable", params[1])
 		}
 	}
 }

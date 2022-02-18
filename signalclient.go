@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	util "github.com/PeterXu/goutil"
@@ -18,7 +19,7 @@ type fnSignalClientAction = func(action string, params []string) error
 func NewSignalClient() *SignalClient {
 	client := &SignalClient{
 		EvObject: NewEvObject(),
-		ch_send:  make(chan *SignalMessage),
+		ch_send:  make(chan *SignalMessage, 3),
 		ch_exit:  make(chan error),
 		pending:  make(map[string]*SignalMessage),
 		actions:  make(map[string]fnSignalClientAction),
@@ -38,13 +39,14 @@ func NewSignalClient() *SignalClient {
 	client.actions[kActionShowService] = client.GoCheckService1
 
 	client.actions[kActionJoinService] = client.GoCheckService2
-	client.actions[kActionLeaveService] = client.GoCheckService1
+	client.actions[kActionLeaveService] = client.GoCheckService2
+	client.actions[kActionConnectService] = client.GoCheckService2
+	client.actions[kActionDisconnectService] = client.GoCheckService2
+
 	client.actions[kActionCreateService] = client.GoCheckService3
-	client.actions[kActionRemoveService] = client.GoCheckService1
-	client.actions[kActionEnableService] = client.GoCheckService1
-	client.actions[kActionDisableService] = client.GoCheckService1
-	client.actions[kActionConnectService] = client.GoCheckService1
-	client.actions[kActionDisconnectService] = client.GoCheckService1
+	client.actions[kActionRemoveService] = client.GoCheckService2
+	client.actions[kActionEnableService] = client.GoCheckService2
+	client.actions[kActionDisableService] = client.GoCheckService2
 
 	return client
 }
@@ -73,7 +75,7 @@ func (sc *SignalClient) Start() {
 
 		for {
 			addr := sc.sigaddr
-			sc.Println("client connecting", addr)
+			sc.Println("client connecting to ", addr)
 			sc.network = kNetworkConnecting
 			if err := sc.Run(addr); err != nil {
 				sc.Println("client error and reconnect for err:", err)
@@ -92,8 +94,9 @@ func (sc *SignalClient) Run(addr string) error {
 	if err != nil {
 		return err
 	}
-	sc.network = kNetworkConnected
 
+	sc.Println("run, connecting success")
+	sc.network = kNetworkConnected
 	ticker := time.NewTicker(30 * time.Second)
 
 	defer func() {
@@ -106,28 +109,28 @@ func (sc *SignalClient) Run(addr string) error {
 	go func() {
 		for {
 			if _, data, err := c.ReadMessage(); err != nil {
-				sc.Println("read, recv fail", err)
+				sc.Println("run, read fail:", err)
 				sc.ch_exit <- err
 				return
 			} else {
-				sc.Println("read, recv len", len(data))
+				//sc.Println("run, read len:", len(data))
 				resp := &SignalResponse{}
 				if err := util.GobDecode(data, resp); err != nil {
-					sc.Println("read, decode fail", err)
+					sc.Println("run, decode fail:", err)
 				} else {
 					sequence := resp.Sequence
 					if len(resp.Event) == 0 {
 						// this is request-response
 						if item, ok := sc.pending[sequence]; ok {
-							sc.Println("read, response for seq", sequence)
+							sc.Println("run, read response for seq:", sequence)
 							item.ch_resp <- resp
 							delete(sc.pending, sequence)
 						} else {
-							sc.Println("read, not found seq", sequence)
+							sc.Println("run, read not found seq:", sequence)
 						}
 					} else {
 						// this is server event
-						sc.Println("read, event data", resp)
+						sc.Println("run, read event resp:", resp)
 						sc.FireEvent(resp.Event, evData{"data": resp})
 					}
 				}
@@ -135,15 +138,22 @@ func (sc *SignalClient) Run(addr string) error {
 		}
 	}()
 
+	// clean queue
+	n := len(sc.ch_send)
+	sc.Println("run, clean queue before write:", n)
+	for i := 0; i < n; i++ {
+		<-sc.ch_send
+	}
+
 	// write
 	for {
 		select {
 		case msg := <-sc.ch_send:
 			if buf, err := util.GobEncode(msg.req); err != nil {
-				sc.Printf("write, encode fail: %v\n", err)
+				sc.Printf("run, encode fail: %v\n", err)
 			} else {
 				if err := c.WriteMessage(websocket.BinaryMessage, buf.Bytes()); err != nil {
-					sc.Printf("write, send fail: %v\n", err)
+					sc.Printf("run, write fail: %v\n", err)
 					return err
 				}
 				if msg.ch_resp != nil {
@@ -173,6 +183,9 @@ func (sc *SignalClient) Close() {
 }
 
 func (sc *SignalClient) CheckOnline(expectOnline bool) error {
+	if sc.network != kNetworkConnected {
+		return errNetworkUnconnected
+	}
 	if sc.online && !expectOnline {
 		return fmt.Errorf("user %s is login", sc.id)
 	} else if !sc.online && expectOnline {
@@ -200,13 +213,13 @@ func (sc *SignalClient) SendRequest(action string, req *SignalRequest) (*SignalR
 
 	select {
 	case resp := <-ch_resp:
-		if resp.Error == nil {
+		if len(resp.Error) == 0 {
 			return resp, nil
 		} else {
-			return nil, resp.Error
+			return nil, errors.New(resp.Error)
 		}
 	case <-ticker.C:
-		return nil, errors.New("request timeout")
+		return nil, errRequestTimeout
 	}
 }
 
@@ -221,11 +234,15 @@ func (sc *SignalClient) Status(action string, params []string) error {
 	case kNetworkConnecting:
 		fmt.Println("connecting")
 	case kNetworkConnected:
-		fmt.Println("connected")
+		if sc.CheckOnline(true) == nil {
+			fmt.Println("connected and onlined")
+		} else {
+			fmt.Println("connected")
+		}
 	case kNetworkDisconnected:
 		fmt.Println("disconnected")
 	default:
-		fmt.Println("other status=", sc.network)
+		fmt.Println("network unknown")
 	}
 	return nil
 }
@@ -234,10 +251,10 @@ func (sc *SignalClient) Connect(action string, params []string) error {
 	if len(params) != 1 {
 		return errFnInvalidParamters(params)
 	}
-	sigaddr := params[1]
+	sigaddr := params[0]
 
 	if sc.network == kNetworkConnecting || sc.network == kNetworkConnected {
-		fmt.Println("connecting/connected: you need to disconnect at first")
+		fmt.Println("you need to disconnect at first")
 	} else {
 		sc.sigaddr = sigaddr
 		sc.Start()
@@ -286,6 +303,8 @@ func (sc *SignalClient) Login(action string, params []string) error {
 		fmt.Println(err)
 		return err
 	}
+
+	fmt.Println("send login request")
 
 	// md5sum(pwd), and server will re-md5 with stored salt
 	req := newSignalRequest(params[0])
@@ -339,7 +358,7 @@ func (sc *SignalClient) GoCheckService3(action string, params []string) error {
 }
 
 func (sc *SignalClient) ControlService(action string, params []string, count int) error {
-	if len(params) < count {
+	if len(params) != count {
 		return errFnInvalidParamters(params)
 	}
 
@@ -354,7 +373,7 @@ func (sc *SignalClient) ControlService(action string, params []string, count int
 	}
 	if count >= 2 {
 		req.ServicePwdMd5 = util.MD5SumGenerate([]string{params[1]})
-		if action == "CreateService" {
+		if action == kActionCreateService {
 			req.ServiceSalt = util.RandomString(4)
 		}
 	}
@@ -363,7 +382,8 @@ func (sc *SignalClient) ControlService(action string, params []string, count int
 	}
 
 	if resp, err := sc.SendRequest(action, req); err == nil {
-		fmt.Println(resp)
+		result := strings.Join(resp.ResultL, "\n")
+		fmt.Println("== result: \n", result)
 		return nil
 	} else {
 		return err

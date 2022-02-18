@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -108,7 +108,6 @@ func (ss *SignalServer) Run() {
 			}
 			close(conn.ch_send)
 		case msg := <-ss.ch_receive:
-			ss.Printf("receive request from connection:%v\n", msg.req.conn)
 			ss.OnMessage(msg.req)
 		case <-tickChan.C:
 			// clear timeout
@@ -134,41 +133,43 @@ func (ss *SignalServer) SyncFromStorage() {
 func (ss *SignalServer) CheckOnline(id string) (*SignalPeer, error) {
 	if _, ok := ss.onlines[id]; ok {
 		if peer, ok := ss.db.Peers[id]; !ok {
-			return nil, errFnPeerNotFound(id)
+			return nil, errClientNotExist
 		} else {
 			return peer, nil
 		}
 	} else {
-		return nil, errFnPeerNotLogin(id)
+		return nil, errClientNotLogin
 	}
 }
 
 func (ss *SignalServer) CheckOnlineConn(id string) (*SignalConnection, error) {
 	if conn, ok := ss.onlines[id]; ok {
 		if _, ok := ss.db.Peers[id]; !ok {
-			return nil, errFnPeerNotFound(id)
+			return nil, errClientNotExist
 		} else {
 			return conn, nil
 		}
 	} else {
-		return nil, errFnPeerNotLogin(id)
+		return nil, errClientNotLogin
 	}
 }
 
 func (ss *SignalServer) OnMessage(req *SignalRequest) {
+	ss.Printf("receive request: %s, seq: %s, conn: %v\n", req.Action, req.Sequence, req.conn)
+
 	var err error
 	resp := NewSignalResponse(req.Sequence)
 	if fn, ok := ss.actions[strings.ToLower(req.Action)]; ok {
 		err = fn(req, resp)
 	} else {
-		err = errors.New("invalid action: " + req.Action)
+		err = errFnInvalidAction(req.Action)
 	}
 
+	ss.Printf("complete request: %s, seq: %s, err: %v\n", req.Action, req.Sequence, err)
 	if err != nil {
-		ss.Printf("process message err: %v, conn: %v\n", err, req.conn)
+		resp.Error = fmt.Sprint(err)
 	}
 
-	resp.Error = err
 	if resp.conn != nil {
 		req.conn.ch_send <- NewSignalResponse(req.Sequence)
 		resp.conn.ch_send <- resp
@@ -178,16 +179,18 @@ func (ss *SignalServer) OnMessage(req *SignalRequest) {
 }
 
 func (ss *SignalServer) Register(req *SignalRequest, resp *SignalResponse) error {
-	if len(req.FromId) < 10 {
-		return errFnInvalidId(req.FromId)
+	if len(req.FromId) < 5 {
+		ss.Warnf("client: %s, invalid id length\n", req.FromId)
+		return errInvalidClientId
 	}
 
-	if len(req.PwdMd5) < 36 || len(req.Salt) < 4 {
-		return errFnInvalidPwd(req.PwdMd5 + ":" + req.Salt)
+	if len(req.PwdMd5) < 32 || len(req.Salt) < 4 {
+		ss.Warnf("client: %s, invalid password: %s:%s\n", req.FromId, req.PwdMd5, req.Salt)
+		return errInvalidPassword
 	}
 
 	if _, ok := ss.db.Peers[req.FromId]; ok {
-		return errFnPeerExist(req.FromId)
+		return errClientExisted
 	} else {
 		new_pwd_md5 := util.MD5SumGenerate([]string{req.PwdMd5, req.Salt})
 		peer := NewSignalPeer(req.FromId, new_pwd_md5, req.Salt)
@@ -202,10 +205,11 @@ func (ss *SignalServer) Login(req *SignalRequest, resp *SignalResponse) error {
 	ss.Printf("client login with connection:%v\n", conn)
 
 	if peer, ok := ss.db.Peers[req.FromId]; !ok {
-		return errFnPeerNotFound(req.FromId)
+		return errClientNotExist
 	} else {
 		if !util.MD5SumVerify([]string{req.PwdMd5, peer.Salt}, peer.PwdMd5) {
-			return errFnWrongPwd(req.PwdMd5 + ":" + peer.Salt + " != " + peer.PwdMd5)
+			ss.Warnf("client: %s, wrong password: %s:%s != %s\n", req.FromId, req.PwdMd5, peer.Salt, peer.PwdMd5)
+			return errWrongPassword
 		}
 
 		// move from pending connections to onlines
@@ -233,8 +237,12 @@ func (ss *SignalServer) Services(req *SignalRequest, resp *SignalResponse) error
 	if _, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	} else {
-		for id := range ss.db.Services {
-			resp.ResultL = append(resp.ResultL, id)
+		for name, srv := range ss.db.Services {
+			if srv.Owner == req.FromId {
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - owned", name))
+			} else {
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - owned %s", name, srv.Owner))
+			}
 		}
 		return nil
 	}
@@ -245,9 +253,16 @@ func (ss *SignalServer) MyServices(req *SignalRequest, resp *SignalResponse) err
 	if peer, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	} else {
-		for id, ok := range peer.InServices {
+		for name, srv := range ss.db.Services {
+			if srv.Owner == req.FromId {
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - owned", name))
+			}
+		}
+		for name, ok := range peer.InServices {
 			if ok {
-				resp.ResultL = append(resp.ResultL, id)
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - joined", name))
+			} else {
+				resp.ResultL = append(resp.ResultL, fmt.Sprintf("%s - left", name))
 			}
 		}
 		return nil
@@ -260,10 +275,22 @@ func (ss *SignalServer) ShowService(req *SignalRequest, resp *SignalResponse) er
 	}
 
 	if item, ok := ss.db.Services[req.ServiceName]; !ok {
-		return errFnServiceNotExist(req.ServiceName)
+		return errServiceNotExist
 	} else {
 		resp.ResultL = append(resp.ResultL, util.JsonEncode(item))
 		return nil
+	}
+}
+
+func (ss *SignalServer) CheckVerifyService(name string, pwdMd5 string) (*SignalService, error) {
+	if service, ok := ss.db.Services[name]; !ok {
+		return nil, errServiceNotExist
+	} else {
+		if !util.MD5SumVerify([]string{pwdMd5, service.Salt}, service.PwdMd5) {
+			ss.Warnf("service:%s, wrong password: %s:%s != %s\n", name, pwdMd5, service.Salt, service.PwdMd5)
+			return nil, errWrongPassword
+		}
+		return service, nil
 	}
 }
 
@@ -271,17 +298,14 @@ func (ss *SignalServer) JoinService(req *SignalRequest, resp *SignalResponse) er
 	if peer, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	} else {
-		if item, ok := ss.db.Services[req.ServiceName]; !ok {
-			return errFnServiceNotExist(req.ServiceName)
+		if service, err := ss.CheckVerifyService(req.ServiceName, req.ServicePwdMd5); err != nil {
+			return err
 		} else {
-			if item.Owner == req.FromId {
-				return errFnServiceInvalid("join not allowed")
+			if service.Owner == req.FromId {
+				return errFnServiceInvalid("owner need not join")
+			} else {
+				peer.InServices[req.ServiceName] = true
 			}
-
-			if !util.MD5SumVerify([]string{req.ServicePwdMd5, item.Salt}, item.PwdMd5) {
-				return errFnWrongPwd(req.ServicePwdMd5 + ":" + item.Salt + " != " + item.PwdMd5)
-			}
-			peer.InServices[req.ServiceName] = true
 		}
 	}
 
@@ -292,31 +316,40 @@ func (ss *SignalServer) LeaveService(req *SignalRequest, resp *SignalResponse) e
 	if peer, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	} else {
-		peer.InServices[req.ServiceName] = false
+		if _, err := ss.CheckVerifyService(req.ServiceName, req.ServicePwdMd5); err != nil {
+			return err
+		} else {
+			if _, ok := peer.InServices[req.ServiceName]; ok {
+				peer.InServices[req.ServiceName] = false
+			}
+			// TODO
+		}
 	}
 	return nil
 }
 
 func (ss *SignalServer) CreateService(req *SignalRequest, resp *SignalResponse) error {
 	if len(req.ServiceName) == 0 {
-		return errFnServiceInvalidName(req.ServiceName)
+		return errServiceInvalidName
 	}
 
-	if len(req.ServicePwdMd5) < 36 || len(req.ServiceSalt) < 4 {
-		return errFnInvalidPwd(req.ServicePwdMd5 + ":" + req.ServiceSalt)
+	if len(req.ServicePwdMd5) < 32 || len(req.ServiceSalt) < 4 {
+		ss.Warnf("service: %s, invalid password: %s:%s\n", req.ServiceName, req.ServicePwdMd5, req.ServiceSalt)
+		return errInvalidPassword
 	}
 
 	if _, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	} else {
 		if _, ok := ss.db.Services[req.ServiceName]; ok {
-			return errFnServiceExist(req.ServiceName)
+			return errServiceExisted
 		} else {
 			service := NewSignalService(req.ServiceName, req.FromId)
 			service.Description = req.ServiceDesc
 			service.PwdMd5 = util.MD5SumGenerate([]string{req.ServicePwdMd5, req.ServiceSalt})
 			service.Salt = req.ServiceSalt
 			ss.db.Services[req.ServiceName] = service
+			// TODO
 			return nil
 		}
 	}
@@ -326,15 +359,14 @@ func (ss *SignalServer) RemoveService(req *SignalRequest, resp *SignalResponse) 
 	if _, err := ss.CheckOnline(req.FromId); err != nil {
 		return err
 	} else {
-		if service, ok := ss.db.Services[req.ServiceName]; !ok {
-			return errFnServiceNotExist(req.ServiceName)
+		if service, err := ss.CheckVerifyService(req.ServiceName, req.ServicePwdMd5); err != nil {
+			return err
 		} else {
 			if service.Owner != req.FromId {
-				return errFnServiceNotOwner(req.FromId)
+				return errServiceRequireOwner
 			}
 			delete(ss.db.Services, req.ServiceName)
-
-			// TODO: notify online peers?
+			// TODO: notify
 			for _, item := range ss.db.Peers {
 				delete(item.InServices, req.ServiceName)
 			}
@@ -348,11 +380,11 @@ func (ss *SignalServer) CheckEnableService(req *SignalRequest, resp *SignalRespo
 		return err
 	}
 
-	if service, ok := ss.db.Services[req.ServiceName]; !ok {
-		return errFnServiceNotExist(req.ServiceName)
+	if service, err := ss.CheckVerifyService(req.ServiceName, req.ServicePwdMd5); err != nil {
+		return err
 	} else {
 		if service.Owner != req.FromId {
-			return errFnServiceNotOwner(req.FromId)
+			return errServiceRequireOwner
 		}
 		switch req.Action {
 		case kActionEnableService:
@@ -370,13 +402,13 @@ func (ss *SignalServer) CheckConnectService(req *SignalRequest, resp *SignalResp
 		return err
 	} else {
 		if isIn, ok := peer.InServices[req.ServiceName]; !ok || !isIn {
-			return errFnServiceNotJoin(req.ServiceName)
+			return errServiceNotJoined
 		}
-		if service, ok := ss.db.Services[req.ServiceName]; !ok {
-			return errFnServiceNotExist(req.ServiceName)
+		if service, err := ss.CheckVerifyService(req.ServiceName, req.ServicePwdMd5); err != nil {
+			return err
 		} else {
 			if service.Owner == req.FromId {
-				return errFnServiceIsOwner(req.FromId)
+				return errServiceShouldNotOwner
 			}
 		}
 
@@ -412,14 +444,14 @@ func (ss *SignalServer) ForwardServiceData(req *SignalRequest, resp *SignalRespo
 		return err
 	} else {
 		if service, ok := ss.db.Services[req.ServiceName]; !ok {
-			return errFnServiceNotExist(req.ServiceName)
+			return errServiceNotExist
 		} else {
 			var toId string
 			if service.Owner == req.FromId {
 				toId = req.ToId
 			} else {
 				if _, ok := peer.InServices[req.ServiceName]; !ok {
-					return errFnServiceNotJoin(req.ServiceName)
+					return errServiceNotJoined
 				}
 				toId = service.Owner
 			}

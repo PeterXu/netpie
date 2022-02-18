@@ -6,21 +6,25 @@ import (
 )
 
 var (
+	errNetworkUnconnected = errors.New("network not connected")
+	errRequestTimeout     = errors.New("request timeout")
+	errWrongPassword      = errors.New("wrong password")
+	errInvalidParameters  = errors.New("invalid paramters")
+	errInvalidPassword    = errors.New("invalid password")
+	errInvalidClientId    = errors.New("invalid client id")
+	errClientNotLogin     = errors.New("client not login")
+	errClientNotExist     = errors.New("client not exist")
+	errClientExisted      = errors.New("client had existed")
+
 	errFnInvalidParamters = func(args []string) error { return errors.New("invalid paramters:" + strings.Join(args, " ")) }
+	errFnInvalidAction    = func(action string) error { return errors.New("invalid action:" + action) }
 
-	errFnInvalidPwd = func(pwd string) error { return errors.New("invalid pwd:" + pwd) }
-	errFnWrongPwd   = func(pwd string) error { return errors.New("wrong pwd:" + pwd) }
-	errFnInvalidId  = func(id string) error { return errors.New("invalid id: " + id) }
+	errServiceNotExist       = errors.New("service not exist")
+	errServiceExisted        = errors.New("service had existed")
+	errServiceInvalidName    = errors.New("service invalid name")
+	errServiceNotJoined      = errors.New("service not joined")
+	errServiceShouldNotOwner = errors.New("service should not owner")
+	errServiceRequireOwner   = errors.New("service require owner")
 
-	errFnPeerExist    = func(id string) error { return errors.New("peer exist: " + id) }
-	errFnPeerNotLogin = func(id string) error { return errors.New("peer not login: " + id) }
-	errFnPeerNotFound = func(id string) error { return errors.New("peer not found: " + id) }
-
-	errFnServiceInvalid     = func(msg string) error { return errors.New("service invalid: " + msg) }
-	errFnServiceInvalidName = func(name string) error { return errors.New("service invalid name: " + name) }
-	errFnServiceExist       = func(name string) error { return errors.New("service exist: " + name) }
-	errFnServiceNotJoin     = func(name string) error { return errors.New("service not join: " + name) }
-	errFnServiceNotExist    = func(name string) error { return errors.New("service not exist: " + name) }
-	errFnServiceNotOwner    = func(id string) error { return errors.New("service not owner: " + id) }
-	errFnServiceIsOwner     = func(id string) error { return errors.New("service is owner: " + id) }
+	errFnServiceInvalid = func(msg string) error { return errors.New("service invalid: " + msg) }
 )
